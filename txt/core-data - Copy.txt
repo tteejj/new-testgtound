@@ -1,0 +1,2459 @@
+# Core Data Management Module
+# Projects, tasks, todos, and command snippets
+
+#region Data Model Initialization
+
+function global:Get-DefaultSettings {
+    return @{
+        # Time Tracker Settings
+        DefaultRate = 100.0 # Use double for currency/rate
+        Currency = "USD"
+        HoursPerDay = 8.0 # Use double for hours
+        DaysPerWeek = 5
+        TimeTrackerTemplates = @{
+            "ADMIN" = @{ Name = "Administrative Tasks"; Id1 = "100"; Id2 = "ADM"; Client = "Internal"; Department = "Operations"; BillingType = "Non-Billable"; Status = "Active"; Budget = 0.0; Rate = 0.0; Notes = "General administrative tasks" }
+            "MEETING" = @{ Name = "Meetings & Calls"; Id1 = "101"; Id2 = "MTG"; Client = "Internal"; Department = "Various"; BillingType = "Non-Billable"; Status = "Active"; Budget = 0.0; Rate = 0.0; Notes = "Team meetings and calls" }
+            "TRAINING" = @{ Name = "Training & Learning"; Id1 = "102"; Id2 = "TRN"; Client = "Internal"; Department = "HR"; BillingType = "Non-Billable"; Status = "Active"; Budget = 0.0; Rate = 0.0; Notes = "Professional development" }
+            "BREAK" = @{ Name = "Breaks & Personal"; Id1 = "103"; Id2 = "BRK"; Client = "Internal"; Department = "Personal"; BillingType = "Non-Billable"; Status = "Active"; Budget = 0.0; Rate = 0.0; Notes = "Breaks and personal time" }
+        }
+        # Todo Tracker Settings
+        DefaultPriority = "Medium"
+        DefaultCategory = "General"
+        ShowCompletedDays = 7
+        EnableTimeTracking = $true
+        AutoArchiveDays = 30
+        # Command Snippets Settings
+        CommandSnippets = @{
+            EnableHotkeys = $true
+            AutoCopyToClipboard = $true
+            ShowInTaskList = $false
+            DefaultCategory = "Commands"
+            RecentLimit = 10
+        }
+        # Excel Integration Settings
+        ExcelFormConfig = @{
+            WorksheetName = "Project Info"
+            StandardFields = @{
+                "Id1" = @{ LabelCell = "A5"; ValueCell = "B5"; Label = "Project ID"; Field = "Id1" }
+                "Id2" = @{ LabelCell = "A6"; ValueCell = "B6"; Label = "Task Code"; Field = "Id2" }
+                "Name" = @{ LabelCell = "A7"; ValueCell = "B7"; Label = "Project Name"; Field = "Name" }
+                "FullName" = @{ LabelCell = "A8"; ValueCell = "B8"; Label = "Full Description"; Field = "FullName" }
+                "AssignedDate" = @{ LabelCell = "A9"; ValueCell = "B9"; Label = "Start Date"; Field = "AssignedDate" }
+                "DueDate" = @{ LabelCell = "A10"; ValueCell = "B10"; Label = "End Date"; Field = "DueDate" }
+                "Manager" = @{ LabelCell = "A11"; ValueCell = "B11"; Label = "Project Manager"; Field = "Manager" }
+                "Budget" = @{ LabelCell = "A12"; ValueCell = "B12"; Label = "Budget"; Field = "Budget" }
+                "Status" = @{ LabelCell = "A13"; ValueCell = "B13"; Label = "Status"; Field = "Status" }
+                "Priority" = @{ LabelCell = "A14"; ValueCell = "B14"; Label = "Priority"; Field = "Priority" }
+                "Department" = @{ LabelCell = "A15"; ValueCell = "B15"; Label = "Department"; Field = "Department" }
+                "Client" = @{ LabelCell = "A16"; ValueCell = "B16"; Label = "Client"; Field = "Client" }
+                "BillingType" = @{ LabelCell = "A17"; ValueCell = "B17"; Label = "Billing Type"; Field = "BillingType" }
+                "Rate" = @{ LabelCell = "A18"; ValueCell = "B18"; Label = "Hourly Rate"; Field = "Rate" }
+            }
+        }
+        # UI Theme
+        Theme = @{
+            Header = "Cyan"; Success = "Green"; Warning = "Yellow"; Error = "Red"
+            Info = "Blue"; Accent = "Magenta"; Subtle = "DarkGray"
+        }
+        QuickActionTipShown = $false
+    }
+}
+
+$script:Data = @{
+    Projects = @{}; Tasks = @(); TimeEntries = @(); ActiveTimers = @{}; ArchivedTasks = @()
+    ExcelCopyJobs = @{}; CurrentWeek = (Get-WeekStart (Get-Date)); Settings = (Get-DefaultSettings)
+}
+
+#endregion
+
+#region Project Management
+
+function global:Get-ProjectOrTemplate {
+    param([string]$Key)
+    if ([string]::IsNullOrEmpty($Key)) { return $null }
+    if ($script:Data.Projects.ContainsKey($Key)) {
+        return $script:Data.Projects[$Key]
+    } elseif ($script:Data.Settings.TimeTrackerTemplates.ContainsKey($Key.ToUpper())) {
+        return $script:Data.Settings.TimeTrackerTemplates[$Key.ToUpper()]
+    }
+    return $null
+}
+
+function global:Show-ProjectsAndTemplates {
+    param([switch]$Simple)
+    Write-Host "`nProjects:" -ForegroundColor Yellow
+    if (-not $script:Data.Projects -or $script:Data.Projects.Count -eq 0) {
+        Write-Host "  No projects defined." -ForegroundColor Gray
+    } else {
+        foreach ($proj in $script:Data.Projects.GetEnumerator() | Sort-Object {$_.Value.Name}) {
+            Write-Host "  [$($proj.Key)] $($proj.Value.Name)" -NoNewline
+            if ($proj.Value.Client) { Write-Host " ($($proj.Value.Client))" -NoNewline }
+            if (-not $Simple) { Write-Host " (Status: $($proj.Value.Status))" } else { Write-Host }
+        }
+    }
+    Write-Host "`nTemplates:" -ForegroundColor Yellow
+    if (-not $script:Data.Settings.TimeTrackerTemplates -or $script:Data.Settings.TimeTrackerTemplates.Count -eq 0) {
+        Write-Host "  No templates defined." -ForegroundColor Gray
+    } else {
+        foreach ($tmpl in $script:Data.Settings.TimeTrackerTemplates.GetEnumerator()) {
+            Write-Host "  [$($tmpl.Key)] $($tmpl.Value.Name)"
+        }
+    }
+}
+
+function global:Show-ProjectDetail {
+    Write-Header "Project Details"
+    Show-ProjectsAndTemplates -Simple
+    $key = Read-Host "`nProject/Template Key for details (or Enter to cancel)"
+    if ([string]::IsNullOrEmpty($key)) { Write-Info "Cancelled."; return }
+    $project = Get-ProjectOrTemplate $key
+    if ($project) {
+        Clear-Host
+        Write-Header "Details for: $($project.Name) (Key: $key)"
+        if ($script:Data.Projects.ContainsKey($key)) {
+            Update-ProjectStatistics -ProjectKey $key
+            $project = $script:Data.Projects[$key]
+        }
+        $properties = $project.PSObject.Properties | Select-Object Name, Value | Where-Object { $_.Name -ne "PSParentPath" -and $_.Name -ne "PSChildName" }
+        foreach ($prop in $properties) {
+            if ($prop.Name -eq "Notes" -and [string]::IsNullOrEmpty($prop.Value)) { continue }
+            Write-Host "  $($prop.Name.PadRight(18)): $($prop.Value)"
+        }
+        if ($project.BillingType -eq "Billable" -and $project.Budget -gt 0) {
+            Write-Host "`nBudget Status:"
+            $percentUsed = ($project.TotalHours / $project.Budget) * 100
+            Write-Host "  Budget: $($project.Budget) hours, Used: $($project.TotalHours) hours ($([Math]::Round($percentUsed, 1))% used)"
+            Show-BudgetWarning -ProjectKey $key
+        }
+        Write-Host "`nPress any key to continue..."
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    } else {
+        Write-Error "Project or Template '$key' not found."
+    }
+}
+
+function global:Import-ProjectFromExcel {
+    Write-Header "Import Project from Excel Form"
+    Write-Warning "Excel import feature is not yet fully implemented in this version."
+    $selectedFile = Start-TerminalFileBrowser -SelectFileMode
+    if (-not $selectedFile) {
+        Write-Info "File selection cancelled."
+        return
+    }
+    Write-Info "Selected file: $selectedFile. (Implementation pending)."
+    Write-Host "`nPress any key to continue..."
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
+
+function global:Configure-ExcelForm {
+    Write-Header "Configure Excel Form Import Mapping"
+    Write-Warning "Excel configuration for import mapping is not yet fully implemented."
+    Write-Info "This feature is under development."
+    Write-Host "`nPress any key to continue..."
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
+
+function global:Add-Project {
+    Write-Header "Add New Project"
+    $projectKeyInput = Read-Host "Project Key (short identifier)"
+    if ([string]::IsNullOrEmpty($projectKeyInput)) { Write-Error "Project key cannot be empty."; return }
+    if ($script:Data.Projects.ContainsKey($projectKeyInput) -or $script:Data.Settings.TimeTrackerTemplates.ContainsKey($projectKeyInput.ToUpper())) {
+        Write-Error "Project key '$projectKeyInput' already exists as a project or template."
+        return
+    }
+    Write-Host "`nBasic Information:" -ForegroundColor Yellow
+    $projectName = Read-Host "Project Name"
+    if ([string]::IsNullOrEmpty($projectName)) { Write-Error "Project name cannot be empty."; return }
+    $id1 = Read-Host "ID1 (custom identifier, optional)"
+    $id2 = Read-Host "ID2 (max 9 chars, optional)"
+    Write-Host "`nClient & Department:" -ForegroundColor Yellow
+    $client = Read-Host "Client Name (optional)"
+    $department = Read-Host "Department (optional)"
+    Write-Host "`nBilling Information:" -ForegroundColor Yellow
+    Write-Host "Billing Type: [B]illable, [N]on-Billable, [F]ixed Price (default: Non-Billable)"
+    $billingChoice = Read-Host "Choice (B/N/F)"
+    $billingType = switch ($billingChoice.ToUpper()) { "B" { "Billable" } "F" { "Fixed Price" } default { "Non-Billable" } }
+    $rate = 0.0
+    $budget = 0.0
+    if ($billingType -ne "Non-Billable") {
+        $rateInput = Read-Host "Hourly Rate (default: $($script:Data.Settings.DefaultRate))"
+        if (-not [string]::IsNullOrWhiteSpace($rateInput)) {
+            try { $rate = [double]$rateInput } catch { Write-Warning "Invalid rate format, using 0.0."; $rate = 0.0 }
+        } else { $rate = $script:Data.Settings.DefaultRate }
+        $budgetInput = Read-Host "Budget Hours (0 for unlimited, optional)"
+        if (-not [string]::IsNullOrWhiteSpace($budgetInput)) {
+            try { $budget = [double]$budgetInput } catch { Write-Warning "Invalid budget format, using 0.0."; $budget = 0.0 }
+        }
+    }
+    Write-Host "`nProject Status:" -ForegroundColor Yellow
+    Write-Host "[A]ctive, [O]n Hold, [C]ompleted (default: Active)"
+    $statusChoice = Read-Host "Status (A/O/C)"
+    $status = switch ($statusChoice.ToUpper()) { "O" { "On Hold" } "C" { "Completed" } default { "Active" } }
+    $notes = Read-Host "`nProject Notes (optional)"
+    $startDate = (Get-Date).ToString("yyyy-MM-dd")
+    $script:Data.Projects[$projectKeyInput] = @{
+        Name = $projectName; Id1 = $id1; Id2 = $id2; Client = $client; Department = $department
+        BillingType = $billingType; Rate = $rate; Budget = $budget; Status = $status; Notes = $notes
+        StartDate = $startDate; TotalHours = 0.0; TotalBilled = 0.0; CompletedTasks = 0; ActiveTasks = 0
+        Manager = ""; Priority = "Medium"; DueDate = $null; CreatedDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    }
+    Save-UnifiedData
+    Write-Success "Project added: $projectKeyInput - $projectName"
+}
+
+function global:Edit-Project {
+    Show-ProjectsAndTemplates -Simple
+    Write-Host ""
+    $projectKeyToEdit = Read-Host "Enter project key to edit"
+    if([string]::IsNullOrWhiteSpace($projectKeyToEdit)) { Write-Info "Edit cancelled."; return }
+    if (-not $script:Data.Projects.ContainsKey($projectKeyToEdit)) {
+        Write-Error "Project '$projectKeyToEdit' not found or cannot edit templates this way."
+        return
+    }
+    $project = $script:Data.Projects[$projectKeyToEdit]
+    Write-Header "Edit Project: $projectKeyToEdit ($($project.Name))"
+    Write-Host "Leave field empty to keep current value." -ForegroundColor Gray
+    $fieldPrompts = @(
+        @{Prop="Name"; Prompt="New Name"; Current=$project.Name}
+        @{Prop="Client"; Prompt="New Client"; Current=$project.Client}
+        @{Prop="Department"; Prompt="New Department"; Current=$project.Department}
+        @{Prop="Id1"; Prompt="New ID1"; Current=$project.Id1}
+        @{Prop="Id2"; Prompt="New ID2 (max 9 chars)"; Current=$project.Id2}
+        @{Prop="Status"; Prompt="New Status ([A]ctive, [O]n Hold, [C]ompleted)"; Current=$project.Status; Type="Status"}
+        @{Prop="BillingType"; Prompt="New Billing Type ([B]illable, [N]on-Billable, [F]ixed Price)"; Current=$project.BillingType; Type="BillingType"}
+        @{Prop="Rate"; Prompt="New Rate"; Current=$project.Rate; Type="Double"; Condition={$project.BillingType -ne "Non-Billable"}}
+        @{Prop="Budget"; Prompt="New Budget Hours"; Current=$project.Budget; Type="Double"; Condition={$project.BillingType -ne "Non-Billable"}}
+        @{Prop="Notes"; Prompt="New Notes (enter 'clear' to empty)"; Current=$project.Notes; Type="StringAllowClear"}
+        @{Prop="StartDate"; Prompt="New Start Date (YYYY-MM-DD)"; Current=$project.StartDate; Type="Date"}
+        @{Prop="DueDate"; Prompt="New Due Date (YYYY-MM-DD, or 'clear')"; Current=$project.DueDate; Type="DateAllowClear"}
+        @{Prop="Manager"; Prompt="New Project Manager"; Current=$project.Manager}
+        @{Prop="Priority"; Prompt="New Project Priority ([C]ritical, [H]igh, [M]edium, [L]ow)"; Current=$project.Priority; Type="ProjectPriority"}
+    )
+    $changesMade = $false
+    foreach($field in $fieldPrompts) {
+        if ($field.Condition -and -not (& $field.Condition)) { continue }
+        Write-Host "`nCurrent $($field.Prop): $($field.Current)"
+        $newValue = Read-Host $field.Prompt
+        if (-not [string]::IsNullOrWhiteSpace($newValue)) {
+            $validUpdate = $true; $oldFieldValue = $project.($field.Prop)
+            switch ($field.Type) {
+                "Double" { try { $project.($field.Prop) = [double]$newValue } catch { Write-Warning "Invalid number for $($field.Prop). Not changed."; $validUpdate = $false } }
+                "Status" { $project.($field.Prop) = switch ($newValue.ToUpper()) { "A" { "Active" } "O" { "On Hold" } "C" { "Completed" } default { $project.($field.Prop) } }; if ($project.($field.Prop) -eq $field.Current -and $newValue.ToUpper() -notin @("A","O","C")) {$validUpdate = $false; Write-Warning "Invalid status. Not changed."} }
+                "BillingType" { $project.($field.Prop) = switch ($newValue.ToUpper()) { "B" { "Billable" } "N" { "Non-Billable" } "F" { "Fixed Price"} default { $project.($field.Prop) } }; if ($project.($field.($field.Prop)) -eq $field.Current -and $newValue.ToUpper() -notin @("B","N","F")) {$validUpdate = $false; Write-Warning "Invalid billing type. Not changed."} }
+                "Date" { try { $project.($field.Prop) = ([datetime]::Parse($newValue)).ToString("yyyy-MM-dd") } catch { Write-Warning "Invalid date for $($field.Prop). Not changed."; $validUpdate = $false } }
+                "DateAllowClear" { if ($newValue.ToLower() -eq 'clear') { $project.($field.Prop) = $null } else { try { $project.($field.Prop) = ([datetime]::Parse($newValue)).ToString("yyyy-MM-dd") } catch { Write-Warning "Invalid date for $($field.Prop). Not changed."; $validUpdate = $false } } }
+                "StringAllowClear" { if ($newValue.ToLower() -eq 'clear') { $project.($field.Prop) = "" } else { $project.($field.Prop) = $newValue } }
+                "ProjectPriority" { $project.($field.Prop) = switch ($newValue.ToUpper()) { "C" { "Critical" } "H" { "High" } "M" { "Medium" } "L" { "Low" } default { $project.($field.Prop) } }; if ($project.($field.Prop) -eq $field.Current -and $newValue.ToUpper() -notin @("C","H","M","L")) {$validUpdate = $false; Write-Warning "Invalid priority. Not changed."} }
+                default { $project.($field.Prop) = $newValue }
+            }
+            if ($validUpdate -and $project.($field.Prop) -ne $oldFieldValue) { $changesMade = $true }
+        }
+    }
+    if ($changesMade) { Save-UnifiedData; Write-Success "Project '$projectKeyToEdit' updated!" } else { Write-Info "No changes made to project '$projectKeyToEdit'." }
+}
+
+function global:Update-ProjectStatistics {
+    param([string]$ProjectKey)
+    if (-not $script:Data.Projects.ContainsKey($ProjectKey)) { return }
+    $project = $script:Data.Projects[$ProjectKey]
+    $projectEntries = $script:Data.TimeEntries | Where-Object { $_.ProjectKey -eq $ProjectKey }
+    $project.TotalHours = [Math]::Round(($projectEntries | Measure-Object -Property Hours -Sum).Sum, 2)
+    $projectTasks = $script:Data.Tasks | Where-Object { $_.ProjectKey -eq $ProjectKey -and ($_.IsCommand -ne $true) }
+    $project.CompletedTasks = ($projectTasks | Where-Object { $_.Completed }).Count
+    $project.ActiveTasks = ($projectTasks | Where-Object { -not $_.Completed }).Count
+}
+
+function global:Export-Projects {
+    Write-Header "Export Projects"
+    if (-not $script:Data.Projects -or $script:Data.Projects.Count -eq 0) { Write-Warning "No projects to export."; return }
+    $exportData = @()
+    foreach ($projEnum in $script:Data.Projects.GetEnumerator()) {
+        $projValue = $projEnum.Value
+        $exportData += [PSCustomObject]@{
+            Key = $projEnum.Key; Name = $projValue.Name; Id1 = $projValue.Id1; Id2 = $projValue.Id2
+            Client = $projValue.Client; Department = $projValue.Department; Status = $projValue.Status
+            BillingType = $projValue.BillingType; Rate = $projValue.Rate; Budget = $projValue.Budget
+            TotalHours = $projValue.TotalHours; ActiveTasks = $projValue.ActiveTasks; CompletedTasks = $projValue.CompletedTasks
+            StartDate = $projValue.StartDate; DueDate = $projValue.DueDate; Manager = $projValue.Manager
+            ProjectPriority = $projValue.Priority; Notes = $projValue.Notes; CreatedDate = $projValue.CreatedDate
+        }
+    }
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $exportFile = Join-Path ([Environment]::GetFolderPath("Desktop")) "Projects_Export_$timestamp.csv"
+    try {
+        $exportData | Export-Csv $exportFile -NoTypeInformation -Encoding UTF8
+        Write-Success "Projects exported to: $exportFile"
+        if ((Read-Host "Open file now? (Y/N)").ToUpper() -eq 'Y') { Start-Process $exportFile }
+    } catch { Write-Error "Failed to export projects: $_" }
+}
+
+function global:Batch-ImportProjects {
+    Write-Warning "Batch Import Projects feature not yet implemented."
+    $selectedFile = Start-TerminalFileBrowser -SelectFileMode
+    if (-not $selectedFile) {
+        Write-Info "File selection cancelled."
+        return
+    }
+    Write-Info "Selected file for batch import: $selectedFile. (Implementation pending)."
+}
+
+function global:Show-ProjectSummary {
+    Write-Header "Project Summary Report"
+    if (-not $script:Data.Projects -or $script:Data.Projects.Count -eq 0) { Write-Warning "No projects available to summarize."; return }
+    $projectSummaryData = @()
+    foreach ($key in ($script:Data.Projects.Keys | Sort-Object)) {
+        Update-ProjectStatistics -ProjectKey $key
+        $p = $script:Data.Projects[$key]
+        $projectSummaryData += [PSCustomObject]@{
+            Key = $key; Name = $p.Name; Client = $p.Client; Status = $p.Status; Budget = $p.Budget; TotalHours = $p.TotalHours
+            RemainingHours = if ($p.Budget -gt 0) { [Math]::Round($p.Budget - $p.TotalHours, 2) } else { "N/A" }
+            Progress = if ($p.Budget -gt 0 -and $p.TotalHours -ge 0) {
+                           if ($p.TotalHours -eq 0 -and $p.Budget -gt 0) { "0%" }
+                           elseif ($p.TotalHours -gt 0) { "$([Math]::Round(($p.TotalHours / $p.Budget) * 100, 1))%" }
+                           else { "N/A" }
+                       } else { "N/A" }
+            ActiveTasks = $p.ActiveTasks
+        }
+    }
+    $projectSummaryData | Format-TableUnicode -Columns @(
+        @{Name="Key"; Title="Key"; Width=10}, @{Name="Name"; Title="Project Name"; Width=25}
+        @{Name="Client"; Title="Client"; Width=15}, @{Name="Status"; Title="Status"; Width=12}
+        @{Name="Budget"; Title="Budget (h)"; Width=10; Align="Right"}, @{Name="TotalHours"; Title="Used (h)"; Width=10; Align="Right"}
+        @{Name="RemainingHours"; Title="Rem (h)"; Width=10; Align="Right"}, @{Name="Progress"; Title="Progress %"; Width=12; Align="Right"}
+        @{Name="ActiveTasks"; Title="Active Tasks"; Width=12; Align="Right"}
+    ) -Title "Project Summary" -BorderStyle "Rounded"
+}
+
+#endregion
+
+#region Command Snippets System
+
+function global:Add-CommandSnippet {
+    Write-Header "Add Command Snippet"
+    $snippetName = Read-Host "Command name/description"
+    if ([string]::IsNullOrEmpty($snippetName)) { Write-Error "Command name cannot be empty!"; return }
+    
+    # MODIFIED: Use new multiline input
+    Write-Host "`nEnter command content (press Esc when finished):" -ForegroundColor Gray
+    $commandText = Read-MultilineText
+    
+    if ([string]::IsNullOrWhiteSpace($commandText)) { Write-Error "Command cannot be empty!"; return }
+    
+    $existingCategories = $script:Data.Tasks | Where-Object { $_.IsCommand -eq $true -and (-not [string]::IsNullOrEmpty($_.Category)) } | Select-Object -ExpandProperty Category -Unique | Sort-Object
+    if ($existingCategories) { Write-Host "`nExisting categories: $($existingCategories -join ', ')" -ForegroundColor DarkCyan }
+    $category = Read-Host "Category (default: $($script:Data.Settings.CommandSnippets.DefaultCategory))"
+    if ([string]::IsNullOrEmpty($category)) { $category = $script:Data.Settings.CommandSnippets.DefaultCategory }
+    Write-Host "`nTags (comma-separated, optional):" -ForegroundColor Gray
+    $tagsInput = Read-Host "Tags"
+    $tags = if (-not [string]::IsNullOrWhiteSpace($tagsInput)) { $tagsInput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } } else { @() }
+    $hotkey = ""
+    if ($script:Data.Settings.CommandSnippets.EnableHotkeys) {
+        Write-Host "`nAssign hotkey (optional, e.g., 'ctrl+1'):" -ForegroundColor Gray
+        $hotkey = Read-Host "Hotkey"
+    }
+    $snippet = @{
+        Id = New-TodoId; Description = $snippetName; Priority = "Low"; Category = $category; ProjectKey = $null
+        StartDate = $null; DueDate = $null; Tags = $tags; Progress = 0; Completed = $false
+        CreatedDate = [datetime]::Now.ToString("yyyy-MM-dd HH:mm:ss"); CompletedDate = $null; EstimatedTime = 0
+        TimeSpent = 0; Subtasks = @(); Notes = $commandText; LastModified = [datetime]::Now.ToString("yyyy-MM-dd HH:mm:ss")
+        IsCommand = $true; Hotkey = $hotkey; LastUsed = $null; UseCount = 0
+    }
+    $script:Data.Tasks += $snippet
+    Save-UnifiedData
+    Write-Success "Command snippet added: $snippetName"
+    if ($script:Data.Settings.CommandSnippets.AutoCopyToClipboard) { if (Copy-ToClipboard $commandText) { Write-Info "Command copied to clipboard!" } }
+}
+
+function global:Get-CommandSnippet {
+    param([string]$Id, [string]$SearchTerm, [string]$CategoryFilter, [string[]]$TagsFilter)
+    $snippets = $script:Data.Tasks | Where-Object { $_.IsCommand -eq $true }
+    if ($Id) { return $snippets | Where-Object { $_.Id -like "$Id*" } | Select-Object -First 1 }
+    if ($SearchTerm) { $snippets = $snippets | Where-Object { $_.Description -like "*$SearchTerm*" -or $_.Notes -like "*$SearchTerm*" -or ($_.Tags -and ($_.Tags -join " ") -like "*$SearchTerm*") } }
+    if ($CategoryFilter) { $snippets = $snippets | Where-Object { $_.Category -eq $CategoryFilter } }
+    if ($TagsFilter -and $TagsFilter.Count -gt 0) { $snippets = $snippets | Where-Object { $snippetTags = $_.Tags; if (-not $snippetTags) { return $false } $foundAll = $true; foreach ($tagToFind in $TagsFilter) { if ($tagToFind -notin $snippetTags) { $foundAll = $false; break } } $foundAll } }
+    return $snippets
+}
+
+function global:Search-CommandSnippets {
+    Write-Header "Search Command Snippets"
+    $searchTerm = Read-Host "Search term (name, content, tags; leave empty for all)"
+    $categoryFilter = Read-Host "Filter by category (optional, exact match)"
+    $tagsInput = Read-Host "Filter by tags (comma-separated, AND logic; optional)"
+    $tagsFilter = if (-not [string]::IsNullOrWhiteSpace($tagsInput)) { $tagsInput -split ',' | ForEach-Object {$_.Trim()} | Where-Object { -not [string]::IsNullOrWhiteSpace($_)} } else { $null }
+    $snippets = Get-CommandSnippet -SearchTerm $searchTerm -CategoryFilter $categoryFilter -TagsFilter $tagsFilter | Sort-Object UseCount -Descending, @{Expression = {if($_.LastUsed){try{[datetime]$_.LastUsed}catch{[datetime]::MinValue}}else{[datetime]::MinValue}}; Descending = $true}, Description
+    if ($snippets.Count -eq 0) { Write-Host "No snippets found matching your criteria." -ForegroundColor Gray; return }
+    $tableData = $snippets | ForEach-Object { [PSCustomObject]@{ ID = $_.Id.Substring(0, 6); Name = $_.Description; Category = $_.Category; Tags = if ($_.Tags) { ($_.Tags -join ", ") } else { "" }; Used = $_.UseCount; Hotkey = if ($_.Hotkey) { $_.Hotkey } else { "-" } } }
+    $tableData | Format-TableUnicode -Columns @( @{Name="ID"; Title="ID"; Width=8}, @{Name="Name"; Title="Name"; Width=30}, @{Name="Category"; Title="Category"; Width=15}, @{Name="Tags"; Title="Tags"; Width=20}, @{Name="Used"; Title="Used"; Width=6; Align="Right"}, @{Name="Hotkey"; Title="Hotkey"; Width=10} ) -Title "Command Snippets"
+    Write-Host "`nEnter snippet ID to copy/execute, or press Enter to cancel."
+    $selectedId = Read-Host
+    if (-not [string]::IsNullOrWhiteSpace($selectedId)) { Execute-CommandSnippet -Id $selectedId }
+}
+
+function global:Execute-CommandSnippet {
+    param([string]$Id)
+    $snippet = Get-CommandSnippet -Id $Id
+    if (-not $snippet) { Write-Error "Snippet with ID starting '$Id' not found!"; return }
+    Write-Host "`nCommand: $($snippet.Description)" -ForegroundColor Cyan
+    Write-Host "Category: $($snippet.Category)" -ForegroundColor Gray
+    if ($snippet.Tags -and $snippet.Tags.Count -gt 0) { Write-Host "Tags: $($snippet.Tags -join ', ')" -ForegroundColor Gray }
+    Write-Host "`nCommand content:" -ForegroundColor Yellow
+    Write-Host $snippet.Notes -ForegroundColor White
+    $snippet.LastUsed = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    $snippet.UseCount = [int]$snippet.UseCount + 1
+    Save-UnifiedData
+    Write-Host "`n[C]opy to clipboard, [E]xecute (PowerShell), [B]oth, or [Enter] to cancel"
+    $actionChoice = Read-Host
+    switch ($actionChoice.ToUpper()) {
+        "C" { if (Copy-ToClipboard $snippet.Notes) { Write-Success "Command copied to clipboard!" } }
+        "E" { Write-Warning "Are you sure you want to execute this command?"; $confirmExecution = Read-Host "Type 'yes' to confirm"; if ($confirmExecution -eq 'yes') { try { Invoke-Expression $snippet.Notes; Write-Success "Command executed!" } catch { Write-Error "Execution failed: $_" } } else { Write-Info "Execution cancelled."} }
+        "B" { if (Copy-ToClipboard $snippet.Notes) { Write-Success "Command copied!" }; Write-Warning "Are you sure you want to execute?"; $confirmExecuteBoth = Read-Host "Type 'yes' to confirm"; if ($confirmExecuteBoth -eq 'yes') { try { Invoke-Expression $snippet.Notes; Write-Success "Command executed!" } catch { Write-Error "Execution failed: $_" } } else { Write-Info "Execution cancelled."} }
+        default { Write-Info "Action cancelled."}
+    }
+}
+
+function global:Remove-CommandSnippet {
+    param([string]$IdInput)
+    $idToRemove = $IdInput
+    if (-not $idToRemove) { Search-CommandSnippets; $idToRemove = Read-Host "`nEnter snippet ID to delete, or Enter to cancel"; if ([string]::IsNullOrWhiteSpace($idToRemove)) { Write-Info "Deletion cancelled."; return } }
+    $snippet = Get-CommandSnippet -Id $idToRemove
+    if (-not $snippet) { Write-Error "Snippet with ID starting '$idToRemove' not found!"; return }
+    Write-Warning "Delete snippet: '$($snippet.Description)' (ID: $($snippet.Id.Substring(0,6)))?"
+    if ((Read-Host "Type 'yes' to confirm") -eq 'yes') {
+        $script:Data.Tasks = $script:Data.Tasks | Where-Object { $_.Id -ne $snippet.Id }
+        Save-UnifiedData
+        Write-Success "Snippet deleted!"
+    } else { Write-Info "Deletion cancelled."}
+}
+
+function global:Manage-CommandSnippets {
+    while ($true) {
+        Write-Header "Command Snippets"
+        $snippetCount = ($script:Data.Tasks | Where-Object { $_.IsCommand -eq $true }).Count
+        Write-Host "Total snippets: $snippetCount" -ForegroundColor Gray
+        $recentSnippets = Get-RecentCommandSnippets -Count 5
+        if ($recentSnippets.Count -gt 0) {
+            Write-Host "`nRecent snippets:" -ForegroundColor Yellow
+            foreach ($snippet in $recentSnippets) {
+                Write-Host "  [$($snippet.Id.Substring(0,6))] $($snippet.Description)" -NoNewline
+                if ($snippet.Hotkey) { Write-Host " ($($snippet.Hotkey))" -NoNewline -ForegroundColor DarkCyan }
+                Write-Host " - Used: $($snippet.UseCount)" -ForegroundColor Gray
+            }
+        }
+        Write-Host "`n[A]dd snippet"; Write-Host "[S]earch/Browse snippets"; Write-Host "[E]xecute by ID"
+        Write-Host "[D]elete by ID"; Write-Host "[L]ist Categories"; Write-Host "List [H]otkeys"; Write-Host "[B]ack to Tools Menu"
+        $choice = Read-Host "`nChoice"
+        $actionTaken = $true
+        switch ($choice.ToLower()) {
+            "a" { Add-CommandSnippet }
+            "s" { Search-CommandSnippets }
+            "e" { $idToExecute = Read-Host "Snippet ID to execute"; if (-not [string]::IsNullOrWhiteSpace($idToExecute)) { Execute-CommandSnippet -Id $idToExecute } else { $actionTaken = $false } }
+            "d" { $idToDelete = Read-Host "Snippet ID to delete"; if (-not [string]::IsNullOrWhiteSpace($idToDelete)) { Remove-CommandSnippet -IdInput $idToDelete } else { $actionTaken = $false } }
+            "l" { Show-SnippetCategories }
+            "h" { Show-SnippetHotkeys }
+            "b" { return }
+            default { if (-not [string]::IsNullOrEmpty($choice)) { Write-Warning "Unknown command." }; $actionTaken = $false }
+        }
+        if ($actionTaken) { Write-Host "`nPress Enter to continue..."; Read-Host }
+    }
+}
+
+function global:Get-RecentCommandSnippets {
+    param([int]$Count = 10)
+    $snippets = $script:Data.Tasks | Where-Object { $_.IsCommand -eq $true }
+    $sortedSnippets = $snippets | Sort-Object @{Expression = { $_.UseCount }; Descending = $true}, @{Expression = { if ($_.LastUsed) { try {[DateTime]::Parse($_.LastUsed)} catch {[DateTime]::MinValue} } else { [DateTime]::MinValue } }; Descending = $true}, Description
+    return $sortedSnippets | Select-Object -First $Count
+}
+
+function global:Show-SnippetCategories {
+    Write-Header "Snippet Categories"
+    $snippets = $script:Data.Tasks | Where-Object { $_.IsCommand -eq $true }
+    if ($snippets.Count -eq 0) { Write-Host "No snippets found to categorize." -ForegroundColor Gray; return }
+    $categories = $snippets | Group-Object Category | Sort-Object Count -Descending
+    if ($categories.Count -eq 0) { Write-Host "No categories assigned to snippets." -ForegroundColor Gray; return }
+    Write-Host "Category usage:" -ForegroundColor Yellow
+    foreach ($catGroup in $categories) {
+        $categoryName = if ([string]::IsNullOrEmpty($catGroup.Name)) {"[Uncategorized]"} else {$catGroup.Name}
+        Write-Host "  $categoryName $($catGroup.Count) snippet(s)"
+        $topInCategory = $catGroup.Group | Sort-Object UseCount -Descending | Sort-Object Description | Select-Object -First 3
+        foreach ($snippet in $topInCategory) { Write-Host "    - $($snippet.Description) (Used: $($snippet.UseCount))" -ForegroundColor Gray }
+    }
+}
+
+function global:Show-SnippetHotkeys {
+    Write-Header "Snippet Hotkeys"
+    $snippetsWithHotkeys = $script:Data.Tasks | Where-Object { $_.IsCommand -eq $true -and (-not [string]::IsNullOrEmpty($_.Hotkey)) }
+    if ($snippetsWithHotkeys.Count -eq 0) { Write-Host "No hotkeys assigned to any snippets." -ForegroundColor Gray; return }
+    Write-Host "Assigned hotkeys:" -ForegroundColor Yellow
+    foreach ($snippet in $snippetsWithHotkeys | Sort-Object Hotkey) { Write-Host "  $($snippet.Hotkey): $($snippet.Description) (ID: $($snippet.Id.Substring(0,6)))" }
+    Write-Warning "`nNote: Actual hotkey binding requires an external keyboard hook implementation."
+}
+
+function global:Edit-CommandSnippetSettings {
+    Write-Header "Command Snippet Settings"
+    if (-not $script:Data.Settings.CommandSnippets) { $script:Data.Settings.CommandSnippets = (Get-DefaultSettings).CommandSnippets }
+    $csSettings = $script:Data.Settings.CommandSnippets
+    Write-Host "Current settings:" -ForegroundColor Yellow
+    Write-Host "  Enable Hotkeys:       $(if ($csSettings.EnableHotkeys) { 'Yes' } else { 'No' }) (Note: actual binding is external)"
+    Write-Host "  Auto-Copy on Add:     $(if ($csSettings.AutoCopyToClipboard) { 'Yes' } else { 'No' })"
+    Write-Host "  Show in Task List:   $(if ($csSettings.ShowInTaskList) { 'Yes' } else { 'No' })"
+    Write-Host "  Default Category:    $($csSettings.DefaultCategory)"
+    Write-Host "  Recent Snippets Limit: $($csSettings.RecentLimit)"
+    Write-Host "`nLeave empty to keep current value." -ForegroundColor Gray
+    $enableHotkeysInput = Read-Host "`nEnable hotkeys? (Y/N)"; if (-not [string]::IsNullOrWhiteSpace($enableHotkeysInput)) { $csSettings.EnableHotkeys = ($enableHotkeysInput.ToUpper() -eq 'Y') }
+    $autoCopyInput = Read-Host "`nAuto-copy to clipboard when adding a new snippet? (Y/N)"; if (-not [string]::IsNullOrWhiteSpace($autoCopyInput)) { $csSettings.AutoCopyToClipboard = ($autoCopyInput.ToUpper() -eq 'Y') }
+    $showInTasksInput = Read-Host "`nShow command snippets in the main task list views? (Y/N)"; if (-not [string]::IsNullOrWhiteSpace($showInTasksInput)) { $csSettings.ShowInTaskList = ($showInTasksInput.ToUpper() -eq 'Y') }
+    $newDefaultCategory = Read-Host "`nDefault category for new snippets (current: $($csSettings.DefaultCategory))"; if (-not [string]::IsNullOrWhiteSpace($newDefaultCategory)) { $csSettings.DefaultCategory = $newDefaultCategory }
+    $newRecentLimitStr = Read-Host "`nNumber of recent snippets to show (current: $($csSettings.RecentLimit))"
+    if (-not [string]::IsNullOrWhiteSpace($newRecentLimitStr)) { try { $limit = [int]$newRecentLimitStr; if ($limit -ge 0) { $csSettings.RecentLimit = $limit } else { Write-Warning "Limit must be non-negative."} } catch { Write-Warning "Invalid number format for limit." } }
+    Save-UnifiedData
+    Write-Success "Command Snippet settings updated!"
+}
+
+#endregion
+
+#region Task Management Functions
+
+function global:Add-TodoTask {
+    Write-Header "Add New Task"
+    $description = Read-Host "`nTask description"
+    if ([string]::IsNullOrEmpty($description)) { Write-Error "Task description cannot be empty!"; return }
+    Write-Host "`nPriority: [C]ritical, [H]igh, [M]edium, [L]ow (default: $($script:Data.Settings.DefaultPriority))" -ForegroundColor Gray
+    $priorityInput = Read-Host "Priority"
+    $priority = switch ($priorityInput.ToUpper()) { "C" { "Critical" } "H" { "High" } "L" { "Low" } "M" { "Medium" } default { $script:Data.Settings.DefaultPriority } }
+    $existingCategories = $script:Data.Tasks | Where-Object { ($_.IsCommand -ne $true) -and (-not [string]::IsNullOrEmpty($_.Category)) } | Select-Object -ExpandProperty Category -Unique | Sort-Object
+    if ($existingCategories) { Write-Host "`nExisting categories: $($existingCategories -join ', ')" -ForegroundColor DarkCyan }
+    $category = Read-Host "Category (default: $($script:Data.Settings.DefaultCategory))"
+    if ([string]::IsNullOrEmpty($category)) { $category = $script:Data.Settings.DefaultCategory }
+    Write-Host "`nLink to project? (Y/N)"
+    $linkProjectChoice = Read-Host
+    $projectKey = $null
+    if ($linkProjectChoice.ToUpper() -eq 'Y') {
+        Show-ProjectsAndTemplates -Simple
+        $projectKeyInput = Read-Host "`nProject key (leave empty if none)"
+        if (-not [string]::IsNullOrWhiteSpace($projectKeyInput)) { if (Get-ProjectOrTemplate $projectKeyInput) { $projectKey = $projectKeyInput } else { Write-Warning "Project '$projectKeyInput' not found." } }
+    }
+    Write-Host "`nStart date (optional): Enter date (YYYY-MM-DD), 'today', 'tomorrow', or '+X' for X days from now" -ForegroundColor Gray
+    $startDateInput = Read-Host "Start date"
+    $startDate = $null
+    if (-not [string]::IsNullOrWhiteSpace($startDateInput)) { try { $parsedDate = switch -Regex ($startDateInput.ToLower()) { '^today$' { [datetime]::Today } '^tomorrow$' { [datetime]::Today.AddDays(1) } '^\+(\d+)$' { [datetime]::Today.AddDays([int]$Matches[1]) } default { [datetime]::Parse($startDateInput) } }; $startDate = $parsedDate.ToString("yyyy-MM-dd") } catch { Write-Warning "Invalid start date format." } }
+    Write-Host "`nDue date (optional): Enter date (YYYY-MM-DD), 'today', 'tomorrow', or '+X' for X days from now" -ForegroundColor Gray
+    $dueDateInput = Read-Host "Due date"
+    $dueDate = $null
+    if (-not [string]::IsNullOrWhiteSpace($dueDateInput)) { try { $parsedDueDate = switch -Regex ($dueDateInput.ToLower()) { '^today$' { [datetime]::Today } '^tomorrow$' { [datetime]::Today.AddDays(1) } '^\+(\d+)$' { [datetime]::Today.AddDays([int]$Matches[1]) } default { [datetime]::Parse($dueDateInput) } }; $dueDate = $parsedDueDate.ToString("yyyy-MM-dd") } catch { Write-Warning "Invalid due date format." } }
+    Write-Host "`nTags (comma-separated, optional):" -ForegroundColor Gray
+    $tagsInput = Read-Host "Tags"
+    $tags = if (-not [string]::IsNullOrWhiteSpace($tagsInput)) { $tagsInput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } } else { @() }
+    $estimatedTimeInput = Read-Host "`nEstimated time in hours (optional, e.g., 2.5)"
+    $estimatedTime = 0.0
+    if (-not [string]::IsNullOrWhiteSpace($estimatedTimeInput)) { try { $estimatedTime = [double]$estimatedTimeInput } catch { Write-Warning "Invalid estimate format." } }
+    $subtasks = @()
+    Write-Host "`nAdd subtasks? (Y/N)" -ForegroundColor Gray
+    $addSubtasksChoice = Read-Host
+    if ($addSubtasksChoice.ToUpper() -eq 'Y') {
+        Write-Host "Enter subtasks (empty line to finish):" -ForegroundColor Gray
+        while ($true) { $subtaskDesc = Read-Host "  Subtask"; if ([string]::IsNullOrEmpty($subtaskDesc)) { break }; $subtasks += @{ Description = $subtaskDesc; Completed = $false; CompletedDate = $null } }
+    }
+    $newTask = @{
+        Id = New-TodoId; Description = $description; Priority = $priority; Category = $category; ProjectKey = $projectKey
+        StartDate = $startDate; DueDate = $dueDate; Tags = $tags; Progress = 0; Completed = $false
+        CreatedDate = [datetime]::Now.ToString("yyyy-MM-dd HH:mm:ss"); CompletedDate = $null; EstimatedTime = $estimatedTime
+        TimeSpent = 0.0; Subtasks = $subtasks; Notes = ""; LastModified = [datetime]::Now.ToString("yyyy-MM-dd HH:mm:ss"); IsCommand = $false
+    }
+    $script:Data.Tasks += $newTask
+    if ($projectKey) { Update-ProjectStatistics -ProjectKey $projectKey }
+    Save-UnifiedData
+    Write-Success "Task added successfully!"; Write-Host "ID: $($newTask.Id)" -ForegroundColor DarkGray
+    if ($script:Data.Settings.EnableTimeTracking -and $projectKey) { if ((Read-Host "`nStart timer for this task? (Y/N)").ToUpper() -eq 'Y') { Start-Timer -ProjectKeyParam $projectKey -TaskIdParam $newTask.Id } }
+}
+
+function global:Quick-AddTask {
+    param([string]$InputString)
+    if (-not $InputString) { $InputString = Read-Host "Quick add task (e.g., 'My new task #work @urgent !High due:tomorrow project:PROJ1 est:2.5')"; if([string]::IsNullOrWhiteSpace($InputString)) { Write-Info "Quick add cancelled."; return } }
+    $description = $InputString; $category = $script:Data.Settings.DefaultCategory; $tags = @(); $priority = $script:Data.Settings.DefaultPriority; $dueDate = $null; $startDate = $null; $projectKey = $null; $estimatedTime = 0.0
+    if ($description -match '#(\S+)') { $category = $Matches[1]; $description = $description -replace ('#' + [regex]::Escape($Matches[1])), '' }
+    $tagMatches = [regex]::Matches($description, '@(\S+)'); foreach ($match in $tagMatches) { $tags += $match.Groups[1].Value; $description = $description -replace ('@' + [regex]::Escape($match.Groups[1].Value)), '' }
+    if ($description -match '!(critical|high|medium|low|c|h|m|l)\b') { $priority = switch ($Matches[1].ToLower()) { "c" { "Critical" } "critical" { "Critical" } "h" { "High" } "high" { "High" } "l" { "Low" } "low" { "Low" } default { "Medium" } }; $description = $description -replace ('!' + [regex]::Escape($Matches[1])), '' }
+    if ($description -match 'project:(\S+)') { $extractedProjectKey = $Matches[1]; if (Get-ProjectOrTemplate $extractedProjectKey) { $projectKey = $extractedProjectKey } else { Write-Warning "Unknown project: $extractedProjectKey" }; $description = $description -replace ('project:' + [regex]::Escape($Matches[1])), '' }
+    if ($description -match 'est:(\d+\.?\d*)') { try { $estimatedTime = [double]$Matches[1] } catch { $estimatedTime = 0.0 }; $description = $description -replace ('est:' + [regex]::Escape($Matches[1])), '' }
+    if ($description -match 'due:(\S+)') { $dueDateStr = $Matches[1]; try { $parsedDueDate = switch -Regex ($dueDateStr.ToLower()) { '^today$' { [datetime]::Today } '^tomorrow$' { [datetime]::Today.AddDays(1) } '^mon(day)?$' { Get-NextWeekday 1 } '^tue(sday)?$' { Get-NextWeekday 2 } '^wed(nesday)?$' { Get-NextWeekday 3 } '^thu(rsday)?$' { Get-NextWeekday 4 } '^fri(day)?$' { Get-NextWeekday 5 } '^sat(urday)?$' { Get-NextWeekday 6 } '^sun(day)?$' { Get-NextWeekday 0 } '^\+(\d+)$' { [datetime]::Today.AddDays([int]$Matches[1]) } default { [datetime]::Parse($dueDateStr) } }; $dueDate = $parsedDueDate.ToString("yyyy-MM-dd") } catch { Write-Warning "Invalid due date format '$dueDateStr'." }; $description = $description -replace ('due:' + [regex]::Escape($Matches[1])), '' }
+    $description = $description.Trim() -replace '\s+', ' '; if ([string]::IsNullOrEmpty($description)) { Write-Error "Task description cannot be empty!"; return }
+    $newTask = @{ Id = New-TodoId; Description = $description; Priority = $priority; Category = $category; ProjectKey = $projectKey; StartDate = $startDate; DueDate = $dueDate; Tags = $tags; Progress = 0; Completed = $false; CreatedDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"); CompletedDate = $null; EstimatedTime = $estimatedTime; TimeSpent = 0.0; Subtasks = @(); Notes = ""; LastModified = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"); IsCommand = $false }
+    $script:Data.Tasks += $newTask; if ($projectKey) { Update-ProjectStatistics -ProjectKey $projectKey }; Save-UnifiedData
+    Write-Success "Quick added: '$description'"; if ($priority -ne $script:Data.Settings.DefaultPriority) { Write-Host "   Priority: $priority" -ForegroundColor Gray }; if ($dueDate) { Write-Host "   Due: $(Format-TodoDate $dueDate)" -ForegroundColor Gray }; if ($projectKey) { Write-Host "   Project: $((Get-ProjectOrTemplate $projectKey).Name)" -ForegroundColor Gray }; if ($tags.Count -gt 0) { Write-Host "   Tags: $($tags -join ', ')" -ForegroundColor Gray }; if ($estimatedTime -gt 0) { Write-Host "   Est. Time: ${estimatedTime}h" -ForegroundColor Gray }
+}
+
+function global:Complete-Task {
+    param([string]$TaskIdInput)
+    $idToComplete = $TaskIdInput; if (-not $idToComplete) { Show-TasksView; $idToComplete = Read-Host "`nEnter task ID to complete"; if ([string]::IsNullOrWhiteSpace($idToComplete)) { Write-Info "Cancelled."; return } }
+    $task = $script:Data.Tasks | Where-Object { $_.Id -like "$idToComplete*" -and ($_.IsCommand -ne $true) } | Select-Object -First 1
+    if (-not $task) { Write-Error "Task with ID starting '$idToComplete' not found!"; return }; if ($task.Completed) { Write-Info "Task '$($task.Description)' is already completed!"; return }
+    if ($task.Subtasks -and ($task.Subtasks | Where-Object { -not $_.Completed }).Count -gt 0) { $uncompletedCount = ($task.Subtasks | Where-Object { -not $_.Completed }).Count; Write-Warning "Task has $uncompletedCount uncompleted subtask(s)."; if ((Read-Host "Complete anyway? (Y/N)").ToUpper() -ne 'Y') { Write-Info "Cancelled."; return } }
+    $task.Completed = $true; $task.Progress = 100; $task.CompletedDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"); $task.LastModified = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    if ($task.ProjectKey) { Update-ProjectStatistics -ProjectKey $task.ProjectKey }; Save-UnifiedData
+    Write-Success "Completed: $($task.Description)"
+    if ($task.TimeSpent -gt 0) { Write-Host "   Time spent: $($task.TimeSpent) hours" -ForegroundColor Gray; if ($task.EstimatedTime -gt 0 -and $task.TimeSpent -gt 0) { $efficiency = [Math]::Round(($task.EstimatedTime / $task.TimeSpent) * 100, 0); Write-Host "   Efficiency: $efficiency% of estimate" -ForegroundColor Gray } }
+}
+
+function global:Update-TaskProgress {
+    param([string]$TaskIdInput)
+    $idToUpdate = $TaskIdInput; if (-not $idToUpdate) { Show-TasksView; $idToUpdate = Read-Host "`nEnter task ID to update progress"; if ([string]::IsNullOrWhiteSpace($idToUpdate)) { Write-Info "Cancelled."; return } }
+    $task = $script:Data.Tasks | Where-Object { $_.Id -like "$idToUpdate*" -and ($_.IsCommand -ne $true) } | Select-Object -First 1
+    if (-not $task) { Write-Error "Task with ID starting '$idToUpdate' not found!"; return }
+    Write-Host "`nTask: $($task.Description) (ID: $($task.Id.Substring(0,6)))" -ForegroundColor Cyan; Write-Host "Current progress: $($task.Progress)%"; Draw-ProgressBar -Percent $task.Progress; Write-Host ""
+    if ($task.Subtasks -and $task.Subtasks.Count -gt 0) { $completedSubtasks = ($task.Subtasks | Where-Object { -not $_.Completed }).Count; $calculatedProgress = [Math]::Round(($completedSubtasks / $task.Subtasks.Count) * 100, 0); Write-Host "Progress based on subtasks: $calculatedProgress%" -ForegroundColor Gray; if ((Read-Host "`nUpdate based on: [S]ubtasks, or [M]anual entry? (S/M)").ToUpper() -eq 'S') { $task.Progress = $calculatedProgress; if ($task.Progress -eq 100 -and (-not $task.Completed)) { $task.Completed = $true; $task.CompletedDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"); Write-Info "Task auto-completed." } elseif ($task.Progress -lt 100 -and $task.Completed) { $task.Completed = $false; $task.CompletedDate = $null; Write-Info "Task re-opened." }; $task.LastModified = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"); Save-UnifiedData; Write-Success "Progress updated to $calculatedProgress%!"; return } }
+    $newProgressInput = Read-Host "New progress percentage (0-100)"; try { $progressValue = [int]$newProgressInput; if ($progressValue -lt 0 -or $progressValue -gt 100) { throw "Out of range." }; $task.Progress = $progressValue; if ($progressValue -eq 100 -and (-not $task.Completed)) { $task.Completed = $true; $task.CompletedDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"); Write-Info "Task marked as completed." } elseif ($progressValue -lt 100 -and $task.Completed) { $task.Completed = $false; $task.CompletedDate = $null; Write-Info "Task marked as not completed." }; $task.LastModified = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"); Save-UnifiedData; Write-Success "Progress updated to $progressValue%!" } catch { Write-Error "Invalid progress value! $_" }
+}
+
+function global:Edit-Task {
+    param([string]$TaskIdInput)
+    $idToEdit = $TaskIdInput; if (-not $idToEdit) { Show-TasksView; $idToEdit = Read-Host "`nEnter task ID to edit"; if ([string]::IsNullOrWhiteSpace($idToEdit)) { Write-Info "Edit cancelled."; return } }
+    $task = $script:Data.Tasks | Where-Object { $_.Id -like "$idToEdit*" -and ($_.IsCommand -ne $true) } | Select-Object -First 1
+    if (-not $task) { Write-Error "Task with ID starting '$idToEdit' not found!"; return }
+    Write-Header "Edit Task: $($task.Id.Substring(0,6)) - $($task.Description)"; Write-Host "Leave field empty to keep current value." -ForegroundColor Gray
+    $originalTaskSnapshot = $task.PSObject.Copy(); $changesMade = $false
+    $newDesc = Read-Host "Description (current: $($task.Description))"; if (-not [string]::IsNullOrWhiteSpace($newDesc) -and $newDesc -ne $task.Description) { $task.Description = $newDesc }
+    $newPriorityInput = Read-Host "Priority (current: $($task.Priority)) - [C]ritical, [H]igh, [M]edium, [L]ow"; if (-not [string]::IsNullOrWhiteSpace($newPriorityInput)) { $task.Priority = switch ($newPriorityInput.ToUpper()) { "C" { "Critical" } "H" { "High" } "M" { "Medium" } "L" { "Low" } default { $task.Priority } } }
+    $newCategory = Read-Host "Category (current: $($task.Category))"; if (-not [string]::IsNullOrWhiteSpace($newCategory) -and $newCategory -ne $task.Category) { $task.Category = $newCategory }
+    $currentProjectName = if ($task.ProjectKey) { (Get-ProjectOrTemplate $task.ProjectKey).Name } else { 'None' }; Write-Host "Project (current: $currentProjectName - key: $($task.ProjectKey))"; Show-ProjectsAndTemplates -Simple; $newProjectKeyInput = Read-Host "New project key (or 'none' to remove)"; if (-not [string]::IsNullOrWhiteSpace($newProjectKeyInput)) { if ($newProjectKeyInput.ToLower() -in @('none', 'clear')) { $task.ProjectKey = $null } elseif (Get-ProjectOrTemplate $newProjectKeyInput) { $task.ProjectKey = $newProjectKeyInput } else { Write-Warning "Project key '$newProjectKeyInput' not found." } }
+    $currentDueDateDisplay = if ($task.DueDate) { Format-TodoDate $task.DueDate } else { 'None' }; $newDueDateInput = Read-Host "Due Date (current: $currentDueDateDisplay) - YYYY-MM-DD, today, +X, or 'clear'"; if (-not [string]::IsNullOrWhiteSpace($newDueDateInput)) { if ($newDueDateInput.ToLower() -eq 'clear') { $task.DueDate = $null } else { try { $parsedDueDate = switch -Regex ($newDueDateInput.ToLower()) { '^today$' { [datetime]::Today } '^tomorrow$' { [datetime]::Today.AddDays(1) } '^\+(\d+)$' { [datetime]::Today.AddDays([int]$Matches[1]) } default { [datetime]::Parse($newDueDateInput) } }; $task.DueDate = $parsedDueDate.ToString("yyyy-MM-dd") } catch { Write-Warning "Invalid date format." } } }
+    $newEstimateInput = Read-Host "Estimated Time (current: $($task.EstimatedTime)h)"; if (-not [string]::IsNullOrWhiteSpace($newEstimateInput)) { try { $task.EstimatedTime = [double]$newEstimateInput } catch { Write-Warning "Invalid number for estimate." } }
+    $currentTagsDisplay = if ($task.Tags -and $task.Tags.Count -gt 0) { $task.Tags -join ', ' } else { "None" }; $newTagsInput = Read-Host "Tags (current: $currentTagsDisplay) - comma-separated, or 'clear'"; if ($newTagsInput -ne $null) { if ($newTagsInput.ToLower() -eq 'clear' -or [string]::IsNullOrWhiteSpace($newTagsInput)) { $task.Tags = @() } else { $task.Tags = $newTagsInput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } } }
+    
+    # MODIFIED: Use new multiline input for notes
+    $editNotesChoice = Read-Host "Edit notes? Current: $(if ([string]::IsNullOrWhiteSpace($task.Notes)) { 'No notes' } else { 'Has notes' }) (Y/N)"; if ($editNotesChoice.ToUpper() -eq 'Y') { Write-Host "Current notes:"; Write-Host $task.Notes -ForegroundColor Gray; Write-Host "`nEnter new notes (press Esc when finished, or type 'clear' on first line and Esc to empty):"; $newNotes = Read-MultilineText; $firstLine = ($newNotes -split "`n")[0].Trim(); if ($firstLine.ToLower() -eq 'clear') { $task.Notes = "" } elseif ($newNotes -ne $task.Notes) { $task.Notes = $newNotes } }
+    
+    foreach($prop in $originalTaskSnapshot.PSObject.Properties.Name){ if($task.$prop -ne $originalTaskSnapshot.$prop){ $changesMade = $true; break } }; if (($task.Tags | ConvertTo-Json) -ne ($originalTaskSnapshot.Tags | ConvertTo-Json)) { $changesMade = $true }
+    if ($changesMade) { $task.LastModified = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"); if ($originalTaskSnapshot.ProjectKey -and $originalTaskSnapshot.ProjectKey -ne $task.ProjectKey) { Update-ProjectStatistics -ProjectKey $originalTaskSnapshot.ProjectKey }; if ($task.ProjectKey) { Update-ProjectStatistics -ProjectKey $task.ProjectKey }; Save-UnifiedData; Write-Success "Task '$($task.Description)' updated!" } else { Write-Info "No changes made." }
+}
+
+function global:Manage-Subtasks {
+
+    param([string]$TaskIdInput)
+
+    
+
+    $idForSubtasks = $TaskIdInput
+
+    if (-not $idForSubtasks) {
+
+        Show-TasksView
+
+        $idForSubtasks = Read-Host "`nEnter task ID to manage subtasks (or Enter to cancel)"
+
+        if ([string]::IsNullOrWhiteSpace($idForSubtasks)) { Write-Info "Subtask management cancelled."; return }
+
+    }
+
+   
+
+    $task = $script:Data.Tasks | Where-Object { $_.Id -like "$idForSubtasks*" -and ($_.IsCommand -ne $true) } | Select-Object -First 1
+
+   
+
+    if (-not $task) { Write-Error "Task with ID starting '$idForSubtasks' not found!"; return }
+
+    if ($null -eq $task.Subtasks -or -not ($task.Subtasks -is [System.Array])) { $task.Subtasks = @() }
+
+ 
+
+    while ($true) {
+
+        Clear-Host
+
+        Write-Header "Manage Subtasks for: $($task.Description) (ID: $($task.Id.Substring(0,6)))"
+
+       
+
+        if ($task.Subtasks.Count -eq 0) { Write-Host "`nNo subtasks yet." -ForegroundColor Gray }
+
+        else {
+
+            Write-Host "`nSubtasks:"
+
+            for ($i = 0; $i -lt $task.Subtasks.Count; $i++) {
+
+                $subtask = $task.Subtasks[$i]
+
+                $icon = if ($subtask.Completed) { "✓" } else { "○" }
+
+                $color = if ($subtask.Completed) { (Get-ThemeProperty "Palette.SubtleFG") } else { (Get-ThemeProperty "Palette.PrimaryFG") }
+
+                Write-Host "  [$i] $(Apply-PSStyle -Text "$icon $($subtask.Description)" -FG $color)"
+
+            }
+
+            $completedCount = ($task.Subtasks | Where-Object { $_.Completed }).Count
+
+            Write-Host "`nProgress from subtasks: $completedCount/$($task.Subtasks.Count) completed" -ForegroundColor Green
+
+        }
+
+       
+
+        Write-Host "`n[A]dd subtask, [T]oggle complete, [E]dit subtask, [D]elete subtask, [B]ack"
+
+        $choice = Read-Host "Choice"
+
+        $actionTaken = $true
+
+ 
+
+        switch ($choice.ToLower()) {
+
+            "a" {
+
+                $desc = Read-Host "New subtask description"
+
+                if (-not [string]::IsNullOrWhiteSpace($desc)) {
+
+                    $task.Subtasks += @{ Description = $desc; Completed = $false; CompletedDate = $null }
+
+                    Write-Success "Subtask added!" # Moved inside the if block
+
+                } else { Write-Info "Subtask not added (empty description)."; $actionTaken = $false }
+
+ 
+
+            }
+
+            "t" {
+
+                if ($task.Subtasks.Count -eq 0) { Write-Error "No subtasks to toggle!"; $actionTaken = $false; break }
+
+                $indexInput = Read-Host "Subtask number to toggle"
+
+                try {
+
+                    $idx = [int]$indexInput
+
+                    if ($idx -ge 0 -and $idx -lt $task.Subtasks.Count) {
+
+                        $task.Subtasks[$idx].Completed = -not $task.Subtasks[$idx].Completed
+
+                        $task.Subtasks[$idx].CompletedDate = if ($task.Subtasks[$idx].Completed) { (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") } else { $null }
+
+                        Write-Success "Subtask completion toggled!"
+
+                    } else { Write-Error "Invalid index!"; $actionTaken = $false }
+
+                } catch { Write-Error "Invalid index format!"; $actionTaken = $false }
+
+            }
+
+            "e" {
+
+                 if ($task.Subtasks.Count -eq 0) { Write-Error "No subtasks to edit!"; $actionTaken = $false; break }
+
+                 $indexInput = Read-Host "Subtask number to edit"
+
+                 try {
+
+                    $idx = [int]$indexInput
+
+                    if ($idx -ge 0 -and $idx -lt $task.Subtasks.Count) {
+
+                        $newSubDesc = Read-Host "New description for '$($task.Subtasks[$idx].Description)'"
+
+                        if(-not [string]::IsNullOrWhiteSpace($newSubDesc)){
+
+                            $task.Subtasks[$idx].Description = $newSubDesc
+
+                            Write-Success "Subtask description updated."
+
+                        } else { Write-Info "Description not changed (empty input)."; $actionTaken = $false}
+
+                    } else { Write-Error "Invalid index!"; $actionTaken = $false }
+
+                 } catch { Write-Error "Invalid index format!"; $actionTaken = $false }
+
+            }
+
+            "d" {
+
+                if ($task.Subtasks.Count -eq 0) { Write-Error "No subtasks to delete!"; $actionTaken = $false; break }
+
+                $indexToDelete = Read-Host "Subtask number to delete"
+
+                try {
+
+                    $idx = [int]$indexToDelete
+
+                    if ($idx -ge 0 -and $idx -lt $task.Subtasks.Count) {
+
+                        Write-Warning "Delete subtask '$($task.Subtasks[$idx].Description)'?"
+
+                        if((Read-Host "Confirm (Y/N)").ToUpper() -eq 'Y'){
+
+                            $task.Subtasks = @($task.Subtasks | Select-Object -Index (0..($task.Subtasks.Count-1) | Where-Object { $_ -ne $idx }))
+
+                            Write-Success "Subtask deleted!"
+
+                        } else { Write-Info "Deletion cancelled."; $actionTaken = $false}
+
+                    } else { Write-Error "Invalid index!"; $actionTaken = $false }
+
+                } catch { Write-Error "Invalid index format!"; $actionTaken = $false }
+
+            }
+
+            "b" { return }
+
+            default {
+
+                if (-not [string]::IsNullOrEmpty($choice)) { Write-Warning "Unknown command." }
+
+                $actionTaken = $false
+
+            }
+
+        }
+
+        if ($actionTaken) {
+
+            if ($task.Subtasks.Count -gt 0) {
+
+                $completedSubtasksCount = ($task.Subtasks | Where-Object { $_.Completed }).Count
+
+                $task.Progress = [Math]::Round(($completedSubtasksCount / $task.Subtasks.Count) * 100, 0)
+
+            } else {
+
+                 if (-not $task.Completed -and $task.Progress -ne 100) { $task.Progress = 0 }
+
+            }
+
+            if ($task.Progress -eq 100 -and (-not $task.Completed)) {
+
+                 $task.Completed = $true; $task.CompletedDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+
+            } elseif ($task.Progress -lt 100 -and $task.Completed) {
+
+                 $task.Completed = $false; $task.CompletedDate = $null
+
+            }
+
+            $task.LastModified = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+
+            Save-UnifiedData
+
+            if ($choice.ToLower() -ne "b") { Start-Sleep -Seconds 1 }
+
+        }
+
+    }
+
+}
+
+ 
+
+function global:Remove-Task {
+
+    param([string]$TaskIdInput)
+
+    
+
+    $idToRemove = $TaskIdInput
+
+    if (-not $idToRemove) {
+
+        Show-TasksView
+
+        $idToRemove = Read-Host "`nEnter task ID to delete (or Enter to cancel)"
+
+        if ([string]::IsNullOrWhiteSpace($idToRemove)) { Write-Info "Deletion cancelled."; return }
+
+    }
+
+   
+
+    $task = $script:Data.Tasks | Where-Object { $_.Id -like "$idToRemove*" -and ($_.IsCommand -ne $true) } | Select-Object -First 1
+
+   
+
+    if (-not $task) { Write-Error "Task with ID starting '$idToRemove' not found!"; return }
+
+   
+
+    Write-Warning "Permanently delete task: '$($task.Description)' (ID: $($task.Id.Substring(0,6)))?"
+
+    if ($task.TimeSpent -gt 0) { Write-Warning "This task has $($task.TimeSpent) hours logged! This time will NOT be deleted from project totals unless manually adjusted." }
+
+    if ($task.Subtasks -and $task.Subtasks.Count -gt 0) { Write-Warning "This task has $($task.Subtasks.Count) subtask(s) which will also be deleted."}
+
+   
+
+    if ((Read-Host "Type 'yes' to confirm deletion").ToLower() -eq 'yes') {
+
+        $originalProjectKey = $task.ProjectKey
+
+        $script:Data.Tasks = $script:Data.Tasks | Where-Object { $_.Id -ne $task.Id }
+
+       
+
+        if ($originalProjectKey) { Update-ProjectStatistics -ProjectKey $originalProjectKey }
+
+        Save-UnifiedData
+
+        Write-Success "Task '$($task.Description)' deleted!"
+
+    } else {
+
+        Write-Info "Deletion cancelled."
+
+    }
+
+}
+
+ 
+
+function global:Archive-CompletedTasks {
+
+    $completedTasks = $script:Data.Tasks | Where-Object { $_.Completed -and ($_.IsCommand -ne $true) }
+
+    
+
+    if ($completedTasks.Count -eq 0) { Write-Info "No completed tasks to archive."; return }
+
+ 
+
+    $cutoffDate = [datetime]::Today.AddDays(-$script:Data.Settings.AutoArchiveDays)
+
+    $tasksToAutoArchive = $completedTasks | Where-Object {
+
+        (-not [string]::IsNullOrEmpty($_.CompletedDate)) -and ([datetime]::Parse($_.CompletedDate).Date -lt $cutoffDate.Date)
+
+    }
+
+   
+
+    $tasksToConsider = $tasksToAutoArchive
+
+    $archiveMode = "automatic"
+
+ 
+
+    if ($tasksToAutoArchive.Count -eq 0) {
+
+        Write-Info "No tasks old enough for automatic archiving (older than $($script:Data.Settings.AutoArchiveDays) days)."
+
+        if ((Read-Host "`nArchive all $($completedTasks.Count) completed task(s) manually now? (Y/N)").ToUpper() -eq 'Y') {
+
+            $tasksToConsider = $completedTasks
+
+            $archiveMode = "manual"
+
+        } else {
+
+            Write-Info "Archive operation cancelled."; return
+
+        }
+
+    } else {
+
+        if ((Read-Host "Archive $($tasksToAutoArchive.Count) task(s) older than $($script:Data.Settings.AutoArchiveDays) days? (Y/N)").ToUpper() -ne 'Y') {
+
+            Write-Info "Automatic archive cancelled."; return
+
+        }
+
+    }
+
+   
+
+    if ($tasksToConsider.Count -eq 0) { Write-Info "No tasks selected for archiving."; return }
+
+ 
+
+    if ($null -eq $script:Data.ArchivedTasks) { $script:Data.ArchivedTasks = @() }
+
+    $script:Data.ArchivedTasks += $tasksToConsider
+
+ 
+
+    $idsToArchive = $tasksToConsider | ForEach-Object {$_.Id}
+
+    $script:Data.Tasks = $script:Data.Tasks | Where-Object { $_.Id -notin $idsToArchive }
+
+   
+
+    $affectedProjects = $tasksToConsider | Where-Object { -not [string]::IsNullOrEmpty($_.ProjectKey) } | Select-Object -ExpandProperty ProjectKey -Unique
+
+    foreach ($projectKey in $affectedProjects) { Update-ProjectStatistics -ProjectKey $projectKey }
+
+   
+
+    Save-UnifiedData
+
+    Write-Success "Archived $($tasksToConsider.Count) task(s) ($archiveMode)."
+
+}
+
+ 
+
+function global:View-TaskArchive {
+
+    Clear-Host
+
+    Write-Header "Archived Tasks"
+
+   
+
+    if (-not $script:Data.ArchivedTasks -or $script:Data.ArchivedTasks.Count -eq 0) {
+
+        Write-Host "`n  📭 No archived tasks." -ForegroundColor Gray
+
+        return
+
+    }
+
+   
+
+    $groupedByMonth = $script:Data.ArchivedTasks |
+
+        Where-Object {-not [string]::IsNullOrEmpty($_.CompletedDate)} |
+
+        Group-Object { try { [datetime]::Parse($_.CompletedDate).ToString("yyyy-MM") } catch { "InvalidDate" } } |
+
+        Sort-Object Name -Descending
+
+   
+
+    foreach ($monthGroup in $groupedByMonth) {
+
+        $monthYearDisplay = if ($monthGroup.Name -eq "InvalidDate") { "[Tasks with Invalid Completion Dates]" }
+
+                           else { try { [datetime]::ParseExact($monthGroup.Name, "yyyy-MM", $null).ToString("MMMM yyyy") } catch { $monthGroup.Name } }
+
+        Write-Host "`n  📅 $monthYearDisplay ($($monthGroup.Count) items)" -ForegroundColor Yellow
+
+       
+
+        foreach ($task in $monthGroup.Group | Sort-Object @{Expression={if([string]::IsNullOrEmpty($_.CompletedDate)) {[DateTime]::MinValue} else {[DateTime]::Parse($_.CompletedDate)}}; Descending=$true}) {
+
+            Write-Host "     ✓ $($task.Description) (ID: $($task.Id.Substring(0,6)))" -ForegroundColor DarkGray
+
+            $completedDateDisplay = if ($task.CompletedDate) { try {([datetime]::Parse($task.CompletedDate)).ToString('MMM dd, yyyy HH:mm')} catch{"N/A"}} else { "N/A" }
+
+            Write-Host "       Completed: $completedDateDisplay" -ForegroundColor DarkGray
+
+           
+
+            if ($task.TimeSpent -gt 0) {
+
+                Write-Host "       Time Spent: $($task.TimeSpent)h" -ForegroundColor DarkGray -NoNewline
+
+                if ($task.EstimatedTime -gt 0) { Write-Host " (Est: $($task.EstimatedTime)h)" -ForegroundColor DarkGray }
+
+                else { Write-Host }
+
+            }
+
+            if ($task.ProjectKey) {
+
+                $project = Get-ProjectOrTemplate $task.ProjectKey
+
+                if ($project) { Write-Host "       Project: $($project.Name) (Key: $($task.ProjectKey))" -ForegroundColor DarkGray }
+
+            }
+
+        }
+
+    }
+
+   
+
+    $totalArchived = $script:Data.ArchivedTasks.Count
+
+    $totalTimeSpent = ($script:Data.ArchivedTasks | Measure-Object -Property TimeSpent -Sum).Sum
+
+    $totalEstimatedTime = ($script:Data.ArchivedTasks | Measure-Object -Property EstimatedTime -Sum).Sum
+
+    
+
+    Write-Host "`n" ("=" * 60) -ForegroundColor DarkGray
+
+    Write-Host "  Total archived: $totalArchived tasks" -ForegroundColor Green
+
+    if ($totalTimeSpent -gt 0) {
+
+        Write-Host "  Total time spent on archived: $totalTimeSpent hours" -ForegroundColor Green
+
+        if ($totalEstimatedTime -gt 0 -and $totalTimeSpent -gt 0) {
+
+            $efficiency = [Math]::Round(($totalEstimatedTime / $totalTimeSpent) * 100, 0)
+
+            Write-Host "  Average efficiency (archived): $efficiency% of estimates" -ForegroundColor Green
+
+        }
+
+    }
+
+   
+
+    Write-Host "`nPress any key to continue..." -ForegroundColor Gray
+
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+
+}
+
+ 
+
+function global:Edit-TaskSettings {
+
+    Write-Header "Task Settings"
+
+    Write-Host "Leave empty to keep current value." -ForegroundColor Gray
+
+ 
+
+    $settings = $script:Data.Settings
+
+    
+
+    $newPriorityInput = Read-Host "`nDefault Priority (current: $($settings.DefaultPriority)) - [C]ritical, [H]igh, [M]edium, [L]ow"
+
+    if (-not [string]::IsNullOrWhiteSpace($newPriorityInput)) {
+
+        $settings.DefaultPriority = switch ($newPriorityInput.ToUpper()) {
+
+            "C" { "Critical" } "H" { "High" } "M" { "Medium" } "L" { "Low" }
+
+            default { $settings.DefaultPriority }
+
+        }
+
+    }
+
+ 
+
+    $newCategoryInput = Read-Host "`nDefault Category (current: $($settings.DefaultCategory))"
+
+    if (-not [string]::IsNullOrWhiteSpace($newCategoryInput)) {
+
+        $settings.DefaultCategory = $newCategoryInput
+
+    }
+
+ 
+
+    $newShowDaysInput = Read-Host "`nDays to show completed tasks in active views (current: $($settings.ShowCompletedDays))"
+
+    if (-not [string]::IsNullOrWhiteSpace($newShowDaysInput)) {
+
+        try {
+
+            $days = [int]$newShowDaysInput
+
+            if ($days -ge 0) { $settings.ShowCompletedDays = $days }
+
+            else { Write-Warning "Days must be non-negative. Not changed."}
+
+        }
+
+        catch { Write-Warning "Invalid number for ShowCompletedDays. Not changed." }
+
+    }
+
+   
+
+    $newArchiveDaysInput = Read-Host "`nDays until completed tasks are auto-archived (current: $($settings.AutoArchiveDays))"
+
+    if (-not [string]::IsNullOrWhiteSpace($newArchiveDaysInput)) {
+
+        try {
+
+            $days = [int]$newArchiveDaysInput
+
+            if ($days -ge 0) { $settings.AutoArchiveDays = $days }
+
+            else { Write-Warning "Days must be non-negative. Not changed."}
+
+        }
+
+        catch { Write-Warning "Invalid number for AutoArchiveDays. Not changed." }
+
+    }
+
+ 
+
+    $enableTimeTrackingInput = Read-Host "`nEnable time tracking integration for tasks (Y/N) (current: $(if($settings.EnableTimeTracking){'Yes'}else{'No'}))"
+
+    if(-not [string]::IsNullOrWhiteSpace($enableTimeTrackingInput)){
+
+        $settings.EnableTimeTracking = $enableTimeTrackingInput.ToUpper() -eq 'Y'
+
+    }
+
+ 
+
+    Save-UnifiedData
+
+    Write-Success "Task settings updated!"
+
+}
+
+ 
+
+#endregion
+
+ 
+
+#region Task Status Functions
+
+ 
+
+function global:Get-TaskStatus {
+
+    param($Task)
+
+   
+
+    if ($Task.Completed) { return "Completed" }
+
+    if ($Task.Progress -ge 100) { return "Done (Pending Confirmation)" }
+
+    if ($Task.Progress -gt 0) { return "In Progress" }
+
+ 
+
+    if (-not [string]::IsNullOrEmpty($Task.DueDate)) {
+
+        try {
+
+            $dueDate = [datetime]::Parse($Task.DueDate).Date
+
+            $today = [datetime]::Today.Date
+
+            $daysUntil = ($dueDate - $today).Days
+
+            if ($daysUntil -lt 0) { return "Overdue" }
+
+            if ($daysUntil -eq 0) { return "Due Today" }
+
+            if ($daysUntil -gt 0 -and $daysUntil -le 3) { return "Due Soon" }
+
+        } catch { }
+
+    }
+
+    if (-not [string]::IsNullOrEmpty($Task.StartDate)) {
+
+         try {
+
+            $startDate = [datetime]::Parse($Task.StartDate).Date
+
+            $today = [datetime]::Today.Date
+
+            if ($startDate -gt $today) { return "Scheduled" }
+
+        } catch { }
+
+    }
+
+    return "Pending"
+
+}
+
+ 
+
+function global:Get-PriorityInfo {
+
+    param($Priority)
+
+    switch ($Priority) {
+
+        "Critical" { return @{ Color = (Get-ThemeProperty "Palette.ErrorFG"); Icon = "🔥" } }
+
+        "High" { return @{ Color = (Get-ThemeProperty "Palette.ErrorFG"); Icon = "🔴" } }
+
+        "Medium" { return @{ Color = (Get-ThemeProperty "Palette.WarningFG"); Icon = "🟡" } }
+
+        "Low" { return @{ Color = (Get-ThemeProperty "Palette.SuccessFG"); Icon = "🟢" } }
+
+        default { return @{ Color = (Get-ThemeProperty "Palette.SubtleFG"); Icon = "⚪" } }
+
+    }
+
+}
+
+ 
+
+#endregion
+
+ 
+
+#region Display Functions (Task Specific Views)
+
+ 
+
+function global:Show-TasksView {
+
+    param(
+
+        [string]$Filter = "",
+
+        [string]$SortBy = "Smart",
+
+        [switch]$ShowCompleted,
+
+        [string]$View = "Default" 
+
+    )
+
+   
+
+    $tasksToDisplay = $script:Data.Tasks
+
+    if (-not $script:Data.Settings.CommandSnippets.ShowInTaskList) {
+
+        $tasksToDisplay = $tasksToDisplay | Where-Object { $_.IsCommand -ne $true }
+
+    }
+
+ 
+
+    if ($Filter) {
+
+        $tasksToDisplay = $tasksToDisplay | Where-Object {
+
+            $_.Description -like "*$Filter*" -or
+
+            $_.Category -like "*$Filter*" -or
+
+            ($_.Tags -and ($_.Tags -join ' ') -like "*$Filter*") -or
+
+            ($_.ProjectKey -and (Get-ProjectOrTemplate $_.ProjectKey) -and (Get-ProjectOrTemplate $_.ProjectKey).Name -like "*$Filter*") -or
+
+            $_.Id -like "*$Filter*"
+
+        }
+
+    }
+
+   
+
+    if (-not $ShowCompleted) {
+
+        $cutoffDate = [datetime]::Today.AddDays(-$script:Data.Settings.ShowCompletedDays)
+
+        $tasksToDisplay = $tasksToDisplay | Where-Object {
+
+            (-not $_.Completed) -or
+
+            ((-not [string]::IsNullOrEmpty($_.CompletedDate)) -and ([datetime]::Parse($_.CompletedDate).Date -ge $cutoffDate.Date))
+
+        }
+
+    }
+
+    
+
+    $sortedTasks = switch ($SortBy.ToLower()) {
+
+        "smart" {
+
+            $tasksToDisplay | Sort-Object @{Expression={
+
+                $status = Get-TaskStatus $_
+
+                switch($status) {
+
+                    "Overdue" { 1 } "Due Today" { 2 } "Due Soon" { 3 }
+
+                    "In Progress" { 4 } "Done (Pending Confirmation)" {4} "Pending" { 5 } "Scheduled" { 6 }
+
+                    "Completed" { 7 } default { 8 }
+
+                }
+
+            }}, @{Expression={
+
+                switch($_.Priority) {
+
+                    "Critical" { 1 } "High" { 2 } "Medium" { 3 } "Low" { 4 } default { 5 }
+
+                }
+
+            }}, @{Expression={
+
+                if([string]::IsNullOrEmpty($_.DueDate)) {
+
+                    [DateTime]::MaxValue
+
+                } else {
+
+                    try { [DateTime]::Parse($_.DueDate) } catch { [DateTime]::MaxValue }
+
+                }
+
+            }}, @{Expression={
+
+                if([string]::IsNullOrEmpty($_.CreatedDate)) {
+
+                    [DateTime]::MinValue
+
+                } else {
+
+                    try { [DateTime]::Parse($_.CreatedDate) } catch { [DateTime]::MinValue }
+
+                }
+
+            }}
+
+        }
+
+        "priority" {
+
+            $tasksToDisplay | Sort-Object @{Expression={
+
+                switch($_.Priority) {
+
+                    "Critical" { 1 } "High" { 2 } "Medium" { 3 } "Low" { 4 } default { 5 }
+
+                }
+
+            }}, @{Expression={
+
+                if([string]::IsNullOrEmpty($_.DueDate)) {
+
+                    [DateTime]::MaxValue
+
+                } else {
+
+                    try { [DateTime]::Parse($_.DueDate) } catch { [DateTime]::MaxValue }
+
+                }
+
+            }}, @{Expression={
+
+                if([string]::IsNullOrEmpty($_.CreatedDate)) {
+
+                    [DateTime]::MinValue
+
+                } else {
+
+                    try { [DateTime]::Parse($_.CreatedDate) } catch { [DateTime]::MinValue }
+
+                }
+
+            }}
+
+        }
+
+        "duedate" {
+
+            $tasksToDisplay | Sort-Object @{Expression={
+
+                if([string]::IsNullOrEmpty($_.DueDate)) {
+
+                    [DateTime]::MaxValue
+
+                } else {
+
+                    try { [DateTime]::Parse($_.DueDate) } catch { [DateTime]::MaxValue }
+
+                }
+
+            }}, @{Expression={
+
+                switch($_.Priority) {
+
+                    "Critical" { 1 } "High" { 2 } "Medium" { 3 } "Low" { 4 } default { 5 }
+
+                }
+
+            }}
+
+        }
+
+        "created" {
+
+            $tasksToDisplay | Sort-Object @{Expression={
+
+                if([string]::IsNullOrEmpty($_.CreatedDate)) {
+
+                    [DateTime]::MinValue
+
+                } else {
+
+                    try { [DateTime]::Parse($_.CreatedDate) } catch { [DateTime]::MinValue }
+
+                }
+
+            }; Descending = $true}
+
+        }
+
+        "category" {
+
+            $tasksToDisplay | Sort-Object @{Expression={
+
+                if([string]::IsNullOrEmpty($_.Category)) { "zzz" } else { $_.Category }
+
+            }}, @{Expression={
+
+                switch($_.Priority) {
+
+                    "Critical" { 1 } "High" { 2 } "Medium" { 3 } "Low" { 4 } default { 5 }
+
+                }
+
+            }}
+
+        }
+
+        "project" {
+
+            $tasksToDisplay | Sort-Object @{Expression={
+
+                if([string]::IsNullOrEmpty($_.ProjectKey)) { "zzz" } else { $_.ProjectKey }
+
+            }}, @{Expression={
+
+                switch($_.Priority) {
+
+                    "Critical" { 1 } "High" { 2 } "Medium" { 3 } "Low" { 4 } default { 5 }
+
+                }
+
+            }}
+
+        }
+
+        default { $tasksToDisplay }
+
+    }
+
+   
+
+    if ($sortedTasks.Count -eq 0) {
+
+        Write-Host "`n  📭 No tasks found matching current filters." -ForegroundColor Yellow
+
+        Show-TaskStatistics $tasksToDisplay
+
+        return
+
+    }
+
+   
+
+    switch ($View.ToLower()) {
+
+        "kanban" { Show-KanbanView $sortedTasks }
+
+        "timeline" { Show-TimelineView $sortedTasks }
+
+        "project" { Show-ProjectTaskView $sortedTasks }
+
+        default { Show-TaskListView $sortedTasks }
+
+    }
+
+   
+
+    Show-TaskStatistics $sortedTasks
+
+}
+
+ 
+
+ 
+
+function global:Show-TaskListView {
+
+    param($TasksToDisplay)
+
+    
+
+    $groups = $TasksToDisplay | Group-Object Category | Sort-Object Name
+
+   
+
+    foreach ($group in $groups) {
+
+        $categoryName = if ([string]::IsNullOrEmpty($group.Name)) { "[Uncategorized]" } else { $group.Name }
+
+        Write-Host "`n  📁 $categoryName ($($group.Count) tasks)" -ForegroundColor (Get-ThemeProperty "Palette.AccentFG")
+
+        Write-Host "  " ("-" * ($categoryName.Length + 15)) -ForegroundColor (Get-ThemeProperty "Palette.SubtleFG")
+
+        
+
+        foreach ($task in $group.Group) { Show-TaskItem $task }
+
+    }
+
+}
+
+ 
+
+function global:Show-TaskItem {
+
+    param($Task)
+
+   
+
+    $icon = if ($Task.Completed) { Apply-PSStyle -Text "✅" -FG (Get-ThemeProperty "Palette.SuccessFG") } else { "⬜" }
+
+    $priorityInfo = Get-PriorityInfo $Task.Priority
+
+    $id = $Task.Id.Substring(0, 6)
+
+    $status = Get-TaskStatus $Task
+
+    
+
+    Write-Host "  $icon [$id] " -NoNewline
+
+    Write-Host (Apply-PSStyle -Text $priorityInfo.Icon -FG $priorityInfo.Color) -NoNewline
+
+    Write-Host " " -NoNewline
+
+   
+
+    $descriptionText = $Task.Description
+
+    if ($Task.Completed) {
+
+        Write-Host (Apply-PSStyle -Text $descriptionText -FG (Get-ThemeProperty "Palette.SubtleFG"))
+
+    } else {
+
+        $statusColor = switch ($status) {
+
+            "Overdue" { Get-ThemeProperty "Palette.ErrorFG" }
+
+            "Due Today" { Get-ThemeProperty "Palette.WarningFG" }
+
+            "Due Soon" { Get-ThemeProperty "Palette.InfoFG" }
+
+            "In Progress" { Get-ThemeProperty "Palette.InfoFG" }
+
+            "Done (Pending Confirmation)" { Get-ThemeProperty "Palette.SuccessFG"}
+
+            default { Get-ThemeProperty "Palette.PrimaryFG" }
+
+        }
+
+        Write-Host (Apply-PSStyle -Text $descriptionText -FG $statusColor)
+
+    }
+
+   
+
+    Write-Host "      " -NoNewline
+
+    $detailsParts = @()
+
+ 
+
+    if ($status -notin @("Pending", "Completed", "Done (Pending Confirmation)")) {
+
+        $badgeColor = switch ($status) {
+
+            "Overdue" { Get-ThemeProperty "Palette.ErrorFG" }
+
+            "Due Today" { Get-ThemeProperty "Palette.WarningFG" }
+
+            "Due Soon" { Get-ThemeProperty "Palette.InfoFG" }
+
+            "In Progress" { Get-ThemeProperty "Palette.InfoFG" }
+
+            "Scheduled" { Get-ThemeProperty "Palette.AccentFG" }
+
+            default { Get-ThemeProperty "Palette.SubtleFG" }
+
+        }
+
+        $detailsParts += Apply-PSStyle -Text "[$status]" -FG $badgeColor
+
+    }
+
+   
+
+    if (-not [string]::IsNullOrEmpty($Task.DueDate)) {
+
+        $dueDateObj = try {[datetime]::Parse($Task.DueDate)} catch {$null}
+
+        if($dueDateObj){
+
+            $dueDateStr = Format-TodoDate $Task.DueDate
+
+            $daysUntil = ($dueDateObj.Date - [datetime]::Today.Date).Days
+
+            $dateColor = if ($daysUntil -lt 0 -and !$Task.Completed) { Get-ThemeProperty "Palette.ErrorFG" }
+
+                        elseif ($daysUntil -eq 0 -and !$Task.Completed) { Get-ThemeProperty "Palette.WarningFG" }
+
+                        elseif ($daysUntil -gt 0 -and $daysUntil -le 3 -and !$Task.Completed) { Get-ThemeProperty "Palette.InfoFG" }
+
+                        else { Get-ThemeProperty "Palette.SubtleFG" }
+
+            $detailsParts += Apply-PSStyle -Text "📅 $dueDateStr" -FG $dateColor
+
+        }
+
+    }
+
+   
+
+    if ($Task.ProjectKey) {
+
+        $project = Get-ProjectOrTemplate $Task.ProjectKey
+
+        if ($project) {
+
+            $detailsParts += Apply-PSStyle -Text "🏗️  $($project.Name)" -FG (Get-ThemeProperty "Palette.AccentFG")
+
+        }
+
+    }
+
+   
+
+    if ($Task.Tags -and $Task.Tags.Count -gt 0) {
+
+        $detailsParts += Apply-PSStyle -Text "🏷️  $($Task.Tags -join ', ')" -FG (Get-ThemeProperty "Palette.InfoFG")
+
+    }
+
+   
+
+    if ($Task.Progress -gt 0 -and -not $Task.Completed) {
+
+        $detailsParts += Apply-PSStyle -Text "📈 $($Task.Progress)%" -FG (Get-ThemeProperty "Palette.SuccessFG")
+
+    }
+
+   
+
+    if ($Task.TimeSpent -gt 0) {
+
+        $detailsParts += Apply-PSStyle -Text "⏱️  $($Task.TimeSpent)h" -FG (Get-ThemeProperty "Palette.InfoFG")
+
+    }
+
+   
+
+    if ($detailsParts.Count -gt 0) {
+
+        Write-Host ($detailsParts -join (Apply-PSStyle -Text " | " -FG (Get-ThemeProperty "Palette.SubtleFG")))
+
+    } else { Write-Host }
+
+ 
+
+    if ($Task.Subtasks -and $Task.Subtasks.Count -gt 0) {
+
+        $completedSubtasks = ($Task.Subtasks | Where-Object { $_.Completed }).Count
+
+        Write-Host "      📌 Subtasks: $completedSubtasks/$($Task.Subtasks.Count) completed" -ForegroundColor (Get-ThemeProperty "Palette.InfoFG")
+
+    }
+
+}
+
+ 
+
+function global:Show-KanbanView {
+
+    param($TasksToDisplay)
+
+    
+
+    $columns = @{
+
+        "To Do" = $TasksToDisplay | Where-Object { (-not $_.Completed) -and ($_.Progress -eq 0) -and (Get-TaskStatus $_) -notin @("Scheduled", "Overdue", "Due Today", "Due Soon") }
+
+        "Scheduled/Due" = $TasksToDisplay | Where-Object { (-not $_.Completed) -and ($_.Progress -eq 0) -and (Get-TaskStatus $_) -in @("Scheduled", "Overdue", "Due Today", "Due Soon") }
+
+        "In Progress" = $TasksToDisplay | Where-Object { (-not $_.Completed) -and ($_.Progress -gt 0) -and ($_.Progress -lt 100) }
+
+        "Done" = $TasksToDisplay | Where-Object { $_.Completed -or ($_.Progress -eq 100) }
+
+    }
+
+    $columnOrder = @("To Do", "Scheduled/Due", "In Progress", "Done")
+
+    $columnColors = @{
+
+        "To Do" = (Get-ThemeProperty "Palette.PrimaryFG")
+
+        "Scheduled/Due" = (Get-ThemeProperty "Palette.WarningFG")
+
+        "In Progress" = (Get-ThemeProperty "Palette.InfoFG")
+
+        "Done" = (Get-ThemeProperty "Palette.SuccessFG")
+
+    }
+
+ 
+
+    Write-Host "`n  KANBAN BOARD" -ForegroundColor (Get-ThemeProperty "Palette.InfoFG")
+
+    Write-Host "  " ("=" * (($columnOrder.Count * 22) + $columnOrder.Count -1)) -ForegroundColor (Get-ThemeProperty "Palette.SubtleFG")
+
+    
+
+    $maxItems = 0
+
+    if ($columns.Values.Count -gt 0) {
+
+        $maxItems = ($columns.Values | ForEach-Object { $_.Count } | Measure-Object -Maximum).Maximum
+
+        if ($null -eq $maxItems) {$maxItems = 0}
+
+    }
+
+    if ($maxItems -eq 0) { Write-Host "  No tasks to display in Kanban view." ; return}
+
+ 
+
+    $colWidth = 20
+
+    $border = Get-BorderStyleChars
+
+    
+
+    $headerTopLine = "  $($border.TopLeft)"
+
+    $headerTextLine = "  $($border.Vertical)"
+
+    $headerSeparatorLine = "  $($border.TLeft)"
+
+    foreach($colName in $columnOrder){
+
+        $headerTopLine += ($border.Horizontal * $colWidth) + $border.TTop
+
+        $headerTextLine += " $(Apply-PSStyle -Text $colName.ToUpper().PadRight($colWidth -1) -FG $columnColors[$colName])$($border.Vertical)"
+
+        $headerSeparatorLine += ($border.Horizontal * $colWidth) + $border.Cross
+
+    }
+
+    Write-Host ($headerTopLine.Substring(0, $headerTopLine.Length-1) + $border.TopRight)
+
+    Write-Host $headerTextLine
+
+    Write-Host ($headerSeparatorLine.Substring(0, $headerSeparatorLine.Length-1) + $border.TRight)
+
+    
+
+    for ($i = 0; $i -lt $maxItems; $i++) {
+
+        Write-Host "  $($border.Vertical)" -NoNewline
+
+        foreach ($columnName in $columnOrder) {
+
+            $itemsInColumn = $columns[$columnName]
+
+            if ($i -lt $itemsInColumn.Count) {
+
+                $item = $itemsInColumn[$i]
+
+                $text = "$($item.Id.Substring(0,4)): $($item.Description)"
+
+                if ($text.Length -gt ($colWidth - 2)) {
+
+                    $text = $text.Substring(0, $colWidth - 3) + "…"
+
+                }
+
+                $priorityInfo = Get-PriorityInfo $item.Priority
+
+                Write-Host " $(Apply-PSStyle -Text $priorityInfo.Icon -FG $priorityInfo.Color)$($text.PadRight($colWidth - 2))" -NoNewline
+
+            } else {
+
+                Write-Host (" ".PadRight($colWidth)) -NoNewline
+
+            }
+
+            Write-Host "$($border.Vertical)" -NoNewline
+
+        }
+
+        Write-Host
+
+    }
+
+   
+
+    $footerLine = "  $($border.BottomLeft)"
+
+    foreach($colName in $columnOrder){
+
+        $footerLine += ($border.Horizontal * $colWidth) + $border.TBottom
+
+    }
+
+    Write-Host ($footerLine.Substring(0, $footerLine.Length-1) + $border.BottomRight)
+
+}
+
+ 
+
+function global:Show-TimelineView {
+
+    param($TasksToDisplay)
+
+    
+
+    Write-Host "`n  📅 TIMELINE VIEW" -ForegroundColor (Get-ThemeProperty "Palette.InfoFG")
+
+    Write-Host "  " ("=" * 60) -ForegroundColor (Get-ThemeProperty "Palette.SubtleFG")
+
+    
+
+    $today = [datetime]::Today.Date
+
+    $groups = @{
+
+        "Overdue" = $TasksToDisplay | Where-Object { (-not [string]::IsNullOrEmpty($_.DueDate)) -and ([datetime]::Parse($_.DueDate).Date -lt $today) -and (-not $_.Completed) }
+
+        "Today" = $TasksToDisplay | Where-Object { (-not [string]::IsNullOrEmpty($_.DueDate)) -and ([datetime]::Parse($_.DueDate).Date -eq $today) -and (-not $_.Completed) }
+
+        "This Week" = $TasksToDisplay | Where-Object {
+
+            (-not [string]::IsNullOrEmpty($_.DueDate)) -and
+
+            ([datetime]::Parse($_.DueDate).Date -gt $today) -and
+
+            ([datetime]::Parse($_.DueDate).Date -le $today.AddDays(6)) -and
+
+            (-not $_.Completed)
+
+        }
+
+        "Next Week" = $TasksToDisplay | Where-Object {
+
+            (-not [string]::IsNullOrEmpty($_.DueDate)) -and
+
+            ([datetime]::Parse($_.DueDate).Date -gt $today.AddDays(6)) -and
+
+            ([datetime]::Parse($_.DueDate).Date -le $today.AddDays(13)) -and
+
+            (-not $_.Completed)
+
+        }
+
+        "Later" = $TasksToDisplay | Where-Object {
+
+            (-not [string]::IsNullOrEmpty($_.DueDate)) -and
+
+            ([datetime]::Parse($_.DueDate).Date -gt $today.AddDays(13)) -and
+
+            (-not $_.Completed)
+
+        }
+
+        "No Date" = $TasksToDisplay | Where-Object { [string]::IsNullOrEmpty($_.DueDate) -and (-not $_.Completed) }
+
+        "Completed" = $TasksToDisplay | Where-Object {$_.Completed}
+
+    }
+
+   
+
+    foreach ($period in @("Overdue", "Today", "This Week", "Next Week", "Later", "No Date", "Completed")) {
+
+        $itemsInPeriod = $groups[$period]
+
+        if ($itemsInPeriod.Count -eq 0) { continue }
+
+       
+
+        $color = switch ($period) {
+
+            "Overdue" { Get-ThemeProperty "Palette.ErrorFG" } "Today" { Get-ThemeProperty "Palette.WarningFG" }
+
+            "This Week" { Get-ThemeProperty "Palette.InfoFG" } "Next Week" { Get-ThemeProperty "Palette.AccentFG" }
+
+            "Later" { Get-ThemeProperty "Palette.AccentFG" } "No Date" { Get-ThemeProperty "Palette.SubtleFG" }
+
+            "Completed" { Get-ThemeProperty "Palette.SuccessFG"}
+
+        }
+
+       
+
+        Write-Host "`n  ⏰ $period ($($itemsInPeriod.Count))" -ForegroundColor $color
+
+       
+
+        foreach ($task in $itemsInPeriod | Sort-Object @{Expression={if([string]::IsNullOrEmpty($_.DueDate)) {[DateTime]::MaxValue} else {[DateTime]::Parse($_.DueDate)}}}, Priority) {
+
+            $priorityInfo = Get-PriorityInfo $task.Priority
+
+            Write-Host "     $(Apply-PSStyle -Text $priorityInfo.Icon -FG $priorityInfo.Color) " -NoNewline
+
+           
+
+            if ((-not [string]::IsNullOrEmpty($task.DueDate)) -and $period -ne "No Date" -and $period -ne "Completed") {
+
+                $date = try {[datetime]::Parse($task.DueDate)} catch {$null}
+
+                if($date) {Write-Host "$($date.ToString('MMM dd')) - " -NoNewline -ForegroundColor (Get-ThemeProperty "Palette.SubtleFG")}
+
+            }
+
+           
+
+            $taskDescColor = if ($task.Completed) { (Get-ThemeProperty "Palette.SubtleFG") } else { $color }
+
+            Write-Host (Apply-PSStyle -Text "$($task.Id.Substring(0,4)): $($task.Description)" -FG $taskDescColor) -NoNewline
+
+           
+
+            if ($task.ProjectKey) {
+
+                $project = Get-ProjectOrTemplate $task.ProjectKey
+
+                if ($project) { Write-Host (Apply-PSStyle -Text " [$($project.Name)]" -FG (Get-ThemeProperty "Palette.AccentFG")) -NoNewline }
+
+            }
+
+            Write-Host
+
+        }
+
+    }
+
+}
+
+ 
+
+function global:Show-ProjectTaskView {
+
+    param($TasksToDisplay)
+
+    
+
+    Write-Host "`n  🏗️  PROJECT VIEW" -ForegroundColor (Get-ThemeProperty "Palette.InfoFG")
+
+    Write-Host "  " ("=" * 60) -ForegroundColor (Get-ThemeProperty "Palette.SubtleFG")
+
+    
+
+    $groups = $TasksToDisplay | Group-Object ProjectKey | Sort-Object @{ Expression = { if ([string]::IsNullOrEmpty($_.Name)) { "zzz_NoProject" } else { (Get-ProjectOrTemplate $_.Name).Name } } }
+
+    
+
+    foreach ($group in $groups) {
+
+        $projectKey = $group.Name
+
+        $project = if ($projectKey) { Get-ProjectOrTemplate $projectKey } else { $null }
+
+        $projectName = if ($project) { $project.Name } else { "[No Project]" }
+
+       
+
+        $activeCount = ($group.Group | Where-Object { -not $_.Completed }).Count
+
+        $completedCount = ($group.Group | Where-Object { $_.Completed }).Count
+
+        
+
+        Write-Host "`n  📂 $projectName " -NoNewline -ForegroundColor (Get-ThemeProperty "Palette.AccentFG")
+
+        Write-Host "($activeCount active, $completedCount completed)" -ForegroundColor (Get-ThemeProperty "Palette.SubtleFG")
+
+        
+
+        $totalTasksInGroup = $group.Group.Count
+
+        $progressPercent = 0
+
+        if ($totalTasksInGroup -gt 0) {
+
+            $progressPercent = [Math]::Round(($completedCount / $totalTasksInGroup) * 100, 0)
+
+        }
+
+       
+
+        Draw-ProgressBar -Percent $progressPercent; Write-Host ""
+
+       
+
+        foreach ($task in $group.Group | Sort-Object Completed, @{Expression={if([string]::IsNullOrEmpty($_.DueDate)) {[DateTime]::MaxValue} else {[DateTime]::Parse($_.DueDate)}}}, Priority) {
+
+            Show-TaskItem $task
+
+        }
+
+       
+
+        $totalEstimated = ($group.Group | Measure-Object -Property EstimatedTime -Sum).Sum
+
+        $totalSpent = ($group.Group | Measure-Object -Property TimeSpent -Sum).Sum
+
+       
+
+        if ($totalEstimated -gt 0 -or $totalSpent -gt 0) {
+
+            Write-Host "  " ("-" * 40) -ForegroundColor (Get-ThemeProperty "Palette.SubtleFG")
+
+            if ($totalEstimated -gt 0) { Write-Host "  Est. for these tasks: $totalEstimated hours" -ForegroundColor (Get-ThemeProperty "Palette.SubtleFG") }
+
+            if ($totalSpent -gt 0) {
+
+                Write-Host "  Spent on these tasks: $totalSpent hours" -ForegroundColor (Get-ThemeProperty "Palette.SubtleFG")
+
+                if ($totalEstimated -gt 0 -and $totalSpent -gt 0) {
+
+                    $efficiency = [Math]::Round(($totalEstimated / $totalSpent) * 100, 0)
+
+                    Write-Host "  Efficiency for these: $efficiency%" -ForegroundColor (Get-ThemeProperty "Palette.SubtleFG")
+
+                }
+
+            }
+
+        }
+
+    }
+
+}
+
+ 
+
+function global:Show-TaskStatistics {
+
+    param($TasksToDisplay)
+
+    if(-not $TasksToDisplay -or $TasksToDisplay.Count -eq 0) {
+
+        Write-Host "`nNo tasks to show statistics for." -ForegroundColor Gray
+
+        return
+
+    }
+
+   
+
+    $stats = @{
+
+        Total = $TasksToDisplay.Count
+
+        Completed = ($TasksToDisplay | Where-Object { $_.Completed }).Count
+
+        Critical = ($TasksToDisplay | Where-Object { $_.Priority -eq "Critical" -and -not $_.Completed }).Count
+
+        High = ($TasksToDisplay | Where-Object { $_.Priority -eq "High" -and -not $_.Completed }).Count
+
+        Medium = ($TasksToDisplay | Where-Object { $_.Priority -eq "Medium" -and -not $_.Completed }).Count
+
+        Low = ($TasksToDisplay | Where-Object { $_.Priority -eq "Low" -and -not $_.Completed }).Count
+
+        Overdue = ($TasksToDisplay | Where-Object {
+
+            (-not [string]::IsNullOrEmpty($_.DueDate)) -and ([datetime]::Parse($_.DueDate).Date -lt [datetime]::Today.Date) -and (-not $_.Completed)
+
+        }).Count
+
+        DueToday = ($TasksToDisplay | Where-Object {
+
+            (-not [string]::IsNullOrEmpty($_.DueDate)) -and ([datetime]::Parse($_.DueDate).Date -eq [datetime]::Today.Date) -and (-not $_.Completed)
+
+        }).Count
+
+        InProgress = ($TasksToDisplay | Where-Object { $_.Progress -gt 0 -and $_.Progress -lt 100 -and (-not $_.Completed) }).Count
+
+    }
+
+   
+
+    Write-Host "`n" ("=" * 70) -ForegroundColor (Get-ThemeProperty "Palette.SubtleFG")
+
+    $statLine = @("  📊 Total: $($stats.Total)")
+
+    $statLine += Apply-PSStyle -Text "✅ Done: $($stats.Completed)" -FG (Get-ThemeProperty "Palette.SuccessFG")
+
+    if ($stats.Critical -gt 0) { $statLine += Apply-PSStyle -Text "🔥 Critical: $($stats.Critical)" -FG (Get-ThemeProperty "Palette.ErrorFG") }
+
+    if ($stats.High -gt 0) { $statLine += Apply-PSStyle -Text "🔴 High: $($stats.High)" -FG (Get-ThemeProperty "Palette.ErrorFG") }
+
+    if ($stats.Medium -gt 0) { $statLine += Apply-PSStyle -Text "🟡 Med: $($stats.Medium)" -FG (Get-ThemeProperty "Palette.WarningFG") }
+
+    if ($stats.Low -gt 0) { $statLine += Apply-PSStyle -Text "🟢 Low: $($stats.Low)" -FG (Get-ThemeProperty "Palette.SuccessFG") }
+
+    if ($stats.InProgress -gt 0) { $statLine += Apply-PSStyle -Text "🔄 In Progress: $($stats.InProgress)" -FG (Get-ThemeProperty "Palette.InfoFG") }
+
+    if ($stats.DueToday -gt 0) { $statLine += Apply-PSStyle -Text "📅 Due Today: $($stats.DueToday)" -FG (Get-ThemeProperty "Palette.WarningFG") }
+
+    if ($stats.Overdue -gt 0) { $statLine += Apply-PSStyle -Text "⚠️  Overdue: $($stats.Overdue)" -FG (Get-ThemeProperty "Palette.ErrorFG") }
+
+   
+
+    Write-Host ($statLine -join (" " + (Apply-PSStyle -Text "|" -FG (Get-ThemeProperty "Palette.SubtleFG")) + " "))
+
+}
+
+ 
+
+function global:Show-TaskManagementMenu {
+
+    $filterString = ""
+
+    $sortByOption = "Smart"
+
+    $showCompletedTasks = $false
+
+    $viewModeOption = "Default"
+
+    
+
+    while ($true) {
+
+        Clear-Host
+
+        Write-Header "Task Management"
+
+       
+
+        Show-TasksView -Filter $filterString -SortBy $sortByOption -ShowCompleted:$showCompletedTasks -View $viewModeOption
+
+       
+
+        Write-Host "`n" ("=" * 70) -ForegroundColor (Get-ThemeProperty "Palette.SubtleFG")
+
+        $statusLine = "📝 "
+
+        if ($filterString) { $statusLine += Apply-PSStyle -Text "Filter: '$filterString' | " -FG (Get-ThemeProperty "Palette.InfoFG") }
+
+        $statusLine += "Sort: $sortByOption | View: $viewModeOption | "
+
+        $statusLine += if ($showCompletedTasks) { "Showing: All (inc. all completed)" } else { "Showing: Active / Recent Completed (last $($script:Data.Settings.ShowCompletedDays) days)" }
+
+        Write-Host $statusLine
+
+       
+
+        Write-Host "`nActions: [A]dd, [C]omplete, [E]dit, [D]elete, [P]rogress, [ST]Subtasks"
+
+        Write-Host "Display: [F]ilter, [S]ort, [V]iew Mode, [T]oggle Completed Visibility"
+
+        Write-Host "Archive: View [AR]chived, [ARC]hive Now"
+
+        Write-Host "Quick Entry: 'qa <task details>', 'c <id>', 'e <id>', 'd <id>'"
+
+        Write-Host "`n[B] Back to Dashboard"
+
+       
+
+        $choice = Read-Host "`nCommand"
+
+       
+
+        if ($choice -match '^qa\s+(.+)') { Quick-AddTask -InputString $Matches[1]; continue }
+
+        if ($choice -match '^([cde]|st|p)\s+(.+)') {
+
+            $cmd = $Matches[1].ToLower(); $id = $Matches[2]
+
+            switch ($cmd) {
+
+                "c" { Complete-Task -TaskIdInput $id } "d" { Remove-Task -TaskIdInput $id }
+
+                "e" { Edit-Task -TaskIdInput $id } "p" { Update-TaskProgress -TaskIdInput $id }
+
+                "st" { Manage-Subtasks -TaskIdInput $id }
+
+            }
+
+            Write-Host "`nPress Enter to continue..." ; Read-Host; continue
+
+        }
+
+       
+
+        $actionProcessed = $true
+
+        switch ($choice.ToLower()) {
+
+            "a" { Add-TodoTask } "c" { Complete-Task } "e" { Edit-Task } "d" { Remove-Task }
+
+            "p" { Update-TaskProgress } "st" { Manage-Subtasks }
+
+            "f" { $filterString = Read-Host "Filter (empty to clear)"; if ([string]::IsNullOrEmpty($filterString)) { $filterString = "" } }
+
+            "s" {
+
+                Write-Host "Sort by: [S]mart, [P]riority, [D]ue date, [C]reated, c[A]tegory, p[R]oject"
+
+                $sortChoice = Read-Host "Choice"; $sortByOption = switch ($sortChoice.ToLower()) {
+
+                    "p" { "Priority" } "d" { "DueDate" } "c" { "Created" } "a" { "Category" }
+
+                    "r" { "Project" } default { "Smart" }
+
+                }
+
+            }
+
+            "v" {
+
+                Write-Host "View mode: [D]efault List, [K]anban, [T]imeline, [P]roject-grouped"
+
+                $viewChoice = Read-Host "Choice"; $viewModeOption = switch ($viewChoice.ToLower()) {
+
+                    "k" { "Kanban" } "t" { "Timeline" } "p" { "Project" } default { "Default" }
+
+                }
+
+            }
+
+            "t" { $showCompletedTasks = -not $showCompletedTasks }
+
+            "arc" { Archive-CompletedTasks } "ar" { View-TaskArchive }
+
+            "b" { return }
+
+            default {
+
+                if (-not [string]::IsNullOrEmpty($choice)) { Write-Warning "Unknown command." }
+
+                $actionProcessed = $false
+
+            }
+
+        }
+
+        if ($actionProcessed -and $choice.ToLower() -ne "b") { Write-Host "`nPress Enter to continue..."; Read-Host }
+
+    }
+
+}
+
+ 
+
+function global:Show-TaskAnalytics {
+
+    Write-Header "Task Analytics"
+
+ 
+
+    $allTasks = $script:Data.Tasks | Where-Object { $_.IsCommand -ne $true }
+
+    if ($allTasks.Count -eq 0) { Write-Warning "No tasks available for analytics."; return }
+
+ 
+
+    $completedTasks = $allTasks | Where-Object { $_.Completed }
+
+    $activeTasks = $allTasks | Where-Object { -not $_.Completed }
+
+   
+
+    Write-Host "Overall:"
+
+    Write-Host "  Total Tasks: $($allTasks.Count)"
+
+    Write-Host "  Active Tasks: $($activeTasks.Count)" -ForegroundColor (Get-ThemeProperty "Palette.WarningFG")
+
+    Write-Host "  Completed Tasks: $($completedTasks.Count)" -ForegroundColor (Get-ThemeProperty "Palette.SuccessFG")
+
+ 
+
+    if ($allTasks.Count -gt 0) {
+
+        $completionRate = [Math]::Round(($completedTasks.Count / $allTasks.Count) * 100, 1)
+
+        Write-Host "  Completion Rate: $completionRate%"
+
+    }
+
+ 
+
+    $today = [DateTime]::Today.Date
+
+    $startOfWeek = Get-WeekStart $today
+
+    $startOfMonth = $today.AddDays(-($today.Day - 1))
+
+ 
+
+    $completedThisWeek = $completedTasks | Where-Object { (-not [string]::IsNullOrEmpty($_.CompletedDate)) -and ([datetime]::Parse($_.CompletedDate).Date -ge $startOfWeek.Date) }
+
+    $completedThisMonth = $completedTasks | Where-Object { (-not [string]::IsNullOrEmpty($_.CompletedDate)) -and ([datetime]::Parse($_.CompletedDate).Date -ge $startOfMonth.Date) }
+
+ 
+
+    Write-Host "`nCompletion Trends:"
+
+    Write-Host "  Completed this Week (since $($startOfWeek.ToString('MMM dd'))): $($completedThisWeek.Count)"
+
+    Write-Host "  Completed this Month ($($startOfMonth.ToString('MMMM'))): $($completedThisMonth.Count)"
+
+ 
+
+    Write-Host "`nActive Tasks by Priority:"
+
+    $activeTasks | Group-Object Priority | Sort-Object @{Expression={@{"Critical"=1;"High"=2;"Medium"=3;"Low"=4}[$_.Name]}} | ForEach-Object {
+
+        Write-Host "  $($_.Name): $($_.Count)"
+
+    }
+
+ 
+
+    Write-Host "`nActive Tasks by Category:"
+
+    $activeTasks | Group-Object Category | Sort-Object Name | ForEach-Object {
+
+        $catName = if ([string]::IsNullOrEmpty($_.Name)) {"[Uncategorized]"} else {$_.Name} # Corrected
+
+        Write-Host "  $catName $($_.Count)"
+
+    }
+
+   
+
+    $overdueTasks = $activeTasks | Where-Object { (-not [string]::IsNullOrEmpty($_.DueDate)) -and ([datetime]::Parse($_.DueDate).Date -lt $today.Date) }
+
+    if ($overdueTasks.Count -gt 0) {
+
+        Write-Host "`nOverdue Tasks: $($overdueTasks.Count)" -ForegroundColor (Get-ThemeProperty "Palette.ErrorFG")
+
+        $avgOverdueDays = $overdueTasks | ForEach-Object { ($today.Date - ([datetime]::Parse($_.DueDate).Date)).Days } | Measure-Object -Average
+
+        if ($avgOverdueDays.Average -and $avgOverdueDays.Average -gt 0) {
+
+            Write-Host "  Average Overdue by: $([Math]::Round($avgOverdueDays.Average,1)) days"
+
+        }
+
+    }
+
+    Write-Host "`nEstimated vs. Spent Time (Completed Tasks):"
+
+    $completedWithTime = $completedTasks | Where-Object {$_.TimeSpent -gt 0 -and $_.EstimatedTime -gt 0}
+
+    if($completedWithTime.Count -gt 0){
+
+        $totalEst = ($completedWithTime | Measure-Object EstimatedTime -Sum).Sum
+
+        $totalSpent = ($completedWithTime | Measure-Object TimeSpent -Sum).Sum
+
+        Write-Host "  Total Estimated (completed w/ time): $totalEst hours"
+
+        Write-Host "  Total Spent (completed w/ time): $totalSpent hours"
+
+        if($totalSpent -gt 0) {
+
+            $overallEfficiency = [Math]::Round(($totalEst / $totalSpent) * 100, 1)
+
+            Write-Host "  Overall Efficiency: $overallEfficiency%"
+
+        }
+
+    } else { Write-Host "  Not enough data for efficiency calculation."}
+
+}
+
+ 
+
+#endregion

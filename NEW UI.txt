@@ -1,0 +1,660 @@
+# Enhanced UI Components Module
+# Tables, menus, borders, and display functions with MORE VISUAL FLAIR!
+
+#region Enhanced Border Styles with Shadows
+
+$Global:borderStyles = @{
+    None = @{
+        TopLeft     = " "
+        TopRight    = " "
+        BottomLeft  = " "
+        BottomRight = " "
+        Horizontal  = " "
+        Vertical    = " "
+        Cross       = " "
+        TLeft       = " "
+        TRight      = " "
+        TTop        = " "
+        TBottom     = " "
+    }
+    Single = @{
+        TopLeft     = "┌"
+        TopRight    = "┐"
+        BottomLeft  = "└"
+        BottomRight = "┘"
+        Horizontal  = "─"
+        Vertical    = "│"
+        Cross       = "┼"
+        TLeft       = "├"
+        TRight      = "┤"
+        TTop        = "┬"
+        TBottom     = "┴"
+    }
+    Double = @{
+        TopLeft     = "╔"
+        TopRight    = "╗"
+        BottomLeft  = "╚"
+        BottomRight = "╝"
+        Horizontal  = "═"
+        Vertical    = "║"
+        Cross       = "╬"
+        TLeft       = "╠"
+        TRight      = "╣"
+        TTop        = "╦"
+        TBottom     = "╩"
+    }
+    Rounded = @{
+        TopLeft     = "╭"
+        TopRight    = "╮"
+        BottomLeft  = "╰"
+        BottomRight = "╯"
+        Horizontal  = "─"
+        Vertical    = "│"
+        Cross       = "┼"
+        TLeft       = "├"
+        TRight      = "┤"
+        TTop        = "┬"
+        TBottom     = "┴"
+    }
+    Heavy = @{
+        TopLeft     = "┏"
+        TopRight    = "┓"
+        BottomLeft  = "┗"
+        BottomRight = "┛"
+        Horizontal  = "━"
+        Vertical    = "┃"
+        Cross       = "╋"
+        TLeft       = "┣"
+        TRight      = "┫"
+        TTop        = "┳"
+        TBottom     = "┻"
+    }
+    Shadow = @{
+        TopLeft     = "┏"
+        TopRight    = "┓"
+        BottomLeft  = "┗"
+        BottomRight = "┛"
+        Horizontal  = "━"
+        Vertical    = "┃"
+        Cross       = "╋"
+        TLeft       = "┣"
+        TRight      = "┫"
+        TTop        = "┳"
+        TBottom     = "┻"
+        Shadow      = "░"
+    }
+}
+
+#endregion
+
+#region Animated Elements
+
+function global:Show-Spinner {
+    param(
+        [string]$Message = "Loading",
+        [int]$Delay = 100,
+        [scriptblock]$Action
+    )
+    
+    $spinners = @{
+        'dots' = @('⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏')
+        'line' = @('|','/','-','\')
+        'star' = @('✶','✸','✹','✺','✹','✸')
+        'circle' = @('◐','◓','◑','◒')
+        'bounce' = @('⠁','⠂','⠄','⠂')
+        'grow' = @('▁','▃','▄','▅','▆','▇','█','▇','▆','▅','▄','▃')
+    }
+    
+    $spinner = $spinners['dots']
+    $i = 0
+    
+    $job = Start-Job -ScriptBlock $Action
+    
+    while ($job.State -eq 'Running') {
+        Write-Host "`r$($spinner[$i % $spinner.Count]) $Message" -NoNewline -ForegroundColor (Get-ThemeProperty "Palette.AccentFG")
+        Start-Sleep -Milliseconds $Delay
+        $i++
+    }
+    
+    Write-Host "`r✓ $Message - Complete!" -ForegroundColor (Get-ThemeProperty "Palette.SuccessFG")
+    $result = Receive-Job -Job $job
+    Remove-Job -Job $job
+    return $result
+}
+
+#endregion
+
+#region Enhanced Dashboard with Animations
+
+function global:Show-Dashboard {
+    Clear-Host
+    
+    # Animated header with gradient effect
+    Show-AnimatedHeader
+    
+    # Status cards with icons and colors
+    Show-StatusCards
+    
+    # Visual activity timeline
+    Show-ActivityTimeline
+    
+    # Quick actions with keyboard shortcuts highlighted
+    Show-QuickActions
+    
+    # Menu with hover effect simulation
+    Show-MainMenu
+}
+
+function global:Show-AnimatedHeader {
+    $headerLines = @(
+        "╔═══════════════════════════════════════════════════════════════════════╗",
+        "║  ██╗   ██╗███╗   ██╗██╗███████╗██╗███████╗██████╗     ██╗   ██╗███████╗ ║",
+        "║  ██║   ██║████╗  ██║██║██╔════╝██║██╔════╝██╔══██╗    ██║   ██║██╔════╝ ║",
+        "║  ██║   ██║██╔██╗ ██║██║█████╗  ██║█████╗  ██║  ██║    ██║   ██║███████╗ ║",
+        "║  ██║   ██║██║╚██╗██║██║██╔══╝  ██║██╔══╝  ██║  ██║    ╚██╗ ██╔╝╚════██║ ║",
+        "║  ╚██████╔╝██║ ╚████║██║██║     ██║███████╗██████╔╝     ╚████╔╝ ███████║ ║",
+        "║   ╚═════╝ ╚═╝  ╚═══╝╚═╝╚═╝     ╚═╝╚══════╝╚═════╝       ╚═══╝  ╚══════╝ ║",
+        "║                  🚀 PRODUCTIVITY SUITE v5.0 TURBO 🚀                     ║",
+        "╚═══════════════════════════════════════════════════════════════════════╝"
+    )
+    
+    # Gradient colors from blue to cyan
+    $gradientColors = @("#0080FF", "#00A0FF", "#00C0FF", "#00D0FF", "#00E0FF", "#00F0FF", "#00FFFF", "#00FFFF", "#00FFFF")
+    
+    for ($i = 0; $i -lt $headerLines.Count; $i++) {
+        Write-Host (Apply-PSStyle -Text $headerLines[$i] -FG $gradientColors[$i])
+        Start-Sleep -Milliseconds 50
+    }
+    Write-Host
+}
+
+function global:Show-StatusCards {
+    $activeTimers = if ($script:Data.ActiveTimers) { $script:Data.ActiveTimers.Count } else { 0 }
+    $activeTasks = ($script:Data.Tasks | Where-Object { (-not $_.Completed) -and ($_.IsCommand -ne $true) }).Count
+    $todayHours = 0.0
+    if ($script:Data.TimeEntries) {
+        $todayHours = ($script:Data.TimeEntries | Where-Object { $_.Date -eq (Get-Date).ToString("yyyy-MM-dd") } | Measure-Object -Property Hours -Sum).Sum
+        $todayHours = if ($todayHours) { [Math]::Round($todayHours, 2) } else { 0.0 }
+    }
+    
+    # Create visual status cards
+    $cards = @(
+        @{
+            Icon = "📅"
+            Title = "TODAY"
+            Value = (Get-Date).ToString("MMM dd")
+            Subtitle = (Get-Date).ToString("dddd")
+            Color = "Palette.InfoFG"
+        },
+        @{
+            Icon = "⏱️"
+            Title = "HOURS"
+            Value = "$todayHours"
+            Subtitle = "logged today"
+            Color = if ($todayHours -ge 6) { "Palette.SuccessFG" } else { "Palette.WarningFG" }
+        },
+        @{
+            Icon = "⏰"
+            Title = "TIMERS"
+            Value = "$activeTimers"
+            Subtitle = "active"
+            Color = if ($activeTimers -gt 0) { "Palette.ErrorFG" } else { "Palette.SubtleFG" }
+        },
+        @{
+            Icon = "✅"
+            Title = "TASKS"
+            Value = "$activeTasks"
+            Subtitle = "pending"
+            Color = if ($activeTasks -gt 10) { "Palette.ErrorFG" } elseif ($activeTasks -gt 5) { "Palette.WarningFG" } else { "Palette.SuccessFG" }
+        }
+    )
+    
+    Write-Host "┌─────────────────┬─────────────────┬─────────────────┬─────────────────┐"
+    Write-Host "│" -NoNewline
+    foreach ($card in $cards) {
+        $iconAndTitle = "$($card.Icon) $($card.Title)"
+        Write-Host (Apply-PSStyle -Text $iconAndTitle.PadRight(16) -FG (Get-ThemeProperty $card.Color)) -NoNewline
+        Write-Host "│" -NoNewline
+    }
+    Write-Host
+    
+    Write-Host "│" -NoNewline
+    foreach ($card in $cards) {
+        Write-Host (Apply-PSStyle -Text $card.Value.PadRight(16) -FG (Get-ThemeProperty $card.Color) -Bold) -NoNewline
+        Write-Host "│" -NoNewline
+    }
+    Write-Host
+    
+    Write-Host "│" -NoNewline
+    foreach ($card in $cards) {
+        Write-Host (Apply-PSStyle -Text $card.Subtitle.PadRight(16) -FG (Get-ThemeProperty "Palette.SubtleFG")) -NoNewline
+        Write-Host "│" -NoNewline
+    }
+    Write-Host
+    Write-Host "└─────────────────┴─────────────────┴─────────────────┴─────────────────┘"
+}
+
+function global:Show-ActivityTimeline {
+    Write-Host "`n📊 " -NoNewline
+    Write-Host (Apply-PSStyle -Text "ACTIVITY TIMELINE" -FG (Get-ThemeProperty "Palette.AccentFG") -Bold)
+    
+    # Create a simple sparkline for the week
+    $weekStart = Get-WeekStart
+    $sparklineChars = @("▁", "▂", "▃", "▄", "▅", "▆", "▇", "█")
+    $weekData = @()
+    
+    for ($i = 0; $i -lt 7; $i++) {
+        $date = $weekStart.AddDays($i).ToString("yyyy-MM-dd")
+        $dayHours = 0
+        if ($script:Data.TimeEntries) {
+            $dayHours = ($script:Data.TimeEntries | Where-Object { $_.Date -eq $date } | Measure-Object -Property Hours -Sum).Sum
+        }
+        $weekData += if ($dayHours) { [Math]::Min($dayHours, 10) } else { 0 }
+    }
+    
+    $maxHours = ($weekData | Measure-Object -Maximum).Maximum
+    if ($maxHours -eq 0) { $maxHours = 1 }
+    
+    Write-Host "   " -NoNewline
+    $days = @("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+    for ($i = 0; $i -lt 7; $i++) {
+        $normalized = [Math]::Floor(($weekData[$i] / $maxHours) * 7)
+        $char = $sparklineChars[$normalized]
+        $isToday = $i -eq [int](Get-Date).DayOfWeek
+        
+        if ($isToday) {
+            Write-Host (Apply-PSStyle -Text "[$char]" -FG (Get-ThemeProperty "Palette.SuccessFG") -Bold) -NoNewline
+        } else {
+            $color = if ($weekData[$i] -ge 6) { "Palette.SuccessFG" } elseif ($weekData[$i] -gt 0) { "Palette.WarningFG" } else { "Palette.SubtleFG" }
+            Write-Host (Apply-PSStyle -Text " $char " -FG (Get-ThemeProperty $color)) -NoNewline
+        }
+    }
+    Write-Host " → $([Math]::Round(($weekData | Measure-Object -Sum).Sum, 1))h this week"
+}
+
+#endregion
+
+#region Enhanced Progress Bar with Animation
+
+function global:Draw-AnimatedProgressBar {
+    param(
+        [int]$Percent,
+        [int]$Width = 30,
+        [string]$Label = "",
+        [switch]$Animated,
+        [string]$Style = "Blocks" # Blocks, Gradient, Dots, Wave
+    )
+    
+    if($Percent -lt 0) {$Percent = 0} elseif($Percent -gt 100) {$Percent = 100}
+    if($Width -lt 10) {$Width = 10}
+    
+    $filledWidth = [Math]::Floor($Width * ($Percent / 100))
+    $emptyWidth = $Width - $filledWidth
+    
+    switch ($Style) {
+        "Blocks" {
+            $filled = "█" * $filledWidth
+            $empty = "░" * $emptyWidth
+            $progressBar = "[$filled$empty]"
+        }
+        "Gradient" {
+            $gradientChars = @("░", "▒", "▓", "█")
+            $filled = "█" * [Math]::Max(0, $filledWidth - 1)
+            if ($filledWidth -gt 0 -and $filledWidth -lt $Width) {
+                $gradientIndex = [Math]::Floor(($Percent % (100 / $Width)) / (100 / $Width) * 4)
+                $filled += $gradientChars[$gradientIndex]
+            }
+            $empty = "░" * [Math]::Max(0, $emptyWidth - 1)
+            $progressBar = "[$filled$empty]"
+        }
+        "Dots" {
+            $filled = "●" * $filledWidth
+            $empty = "○" * $emptyWidth
+            $progressBar = "⟨$filled$empty⟩"
+        }
+        "Wave" {
+            $waveChars = @("▁", "▂", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄", "▃", "▂", "▁")
+            $progressBar = "["
+            for ($i = 0; $i -lt $Width; $i++) {
+                if ($i -lt $filledWidth) {
+                    $waveIndex = ($i + $Percent) % $waveChars.Count
+                    $progressBar += $waveChars[$waveIndex]
+                } else {
+                    $progressBar += "░"
+                }
+            }
+            $progressBar += "]"
+        }
+    }
+    
+    $color = if ($Percent -ge 80) { "Palette.SuccessFG" } 
+             elseif ($Percent -ge 50) { "Palette.WarningFG" } 
+             else { "Palette.ErrorFG" }
+    
+    Write-Host -NoNewline (Apply-PSStyle -Text $progressBar -FG (Get-ThemeProperty $color))
+    Write-Host -NoNewline " "
+    Write-Host -NoNewline (Apply-PSStyle -Text "$Percent%" -FG (Get-ThemeProperty $color) -Bold)
+    if ($Label) { Write-Host " $Label" } else { Write-Host }
+}
+
+#endregion
+
+#region Enhanced Calendar with Heat Map
+
+function global:Show-CalendarHeatMap {
+    param(
+        [DateTime]$MonthToDisplay = (Get-Date)
+    )
+    
+    Write-Header "Calendar Heat Map - $($MonthToDisplay.ToString('MMMM yyyy'))"
+    
+    $firstDayOfMonth = Get-Date $MonthToDisplay -Day 1
+    $lastDayOfMonth = $firstDayOfMonth.AddMonths(1).AddDays(-1)
+    $startOffset = [int]$firstDayOfMonth.DayOfWeek
+    
+    # Collect heat map data
+    $heatData = @{}
+    if ($script:Data.TimeEntries) {
+        $monthEntries = $script:Data.TimeEntries | Where-Object { 
+            $date = [DateTime]::Parse($_.Date)
+            $date.Month -eq $MonthToDisplay.Month -and $date.Year -eq $MonthToDisplay.Year
+        }
+        foreach ($entry in $monthEntries) {
+            $date = [DateTime]::Parse($entry.Date).Day
+            if (-not $heatData.ContainsKey($date)) { $heatData[$date] = 0 }
+            $heatData[$date] += $entry.Hours
+        }
+    }
+    
+    # Heat map legend
+    $heatLevels = @(
+        @{ Min = 0; Max = 0; Char = "□"; Color = "#404040" },
+        @{ Min = 0.1; Max = 2; Char = "▤"; Color = "#5FA0FF" },
+        @{ Min = 2.1; Max = 4; Char = "▧"; Color = "#40C0FF" },
+        @{ Min = 4.1; Max = 6; Char = "▨"; Color = "#40FFB0" },
+        @{ Min = 6.1; Max = 8; Char = "▩"; Color = "#40FF40" },
+        @{ Min = 8.1; Max = 999; Char = "■"; Color = "#FF4040" }
+    )
+    
+    Write-Host "  " -NoNewline
+    Write-Host (Apply-PSStyle -Text "S  M  T  W  T  F  S" -FG (Get-ThemeProperty "Palette.AccentFG") -Bold)
+    Write-Host "  ┌──────────────────┐"
+    
+    Write-Host "  │" -NoNewline
+    Write-Host (" " * ($startOffset * 3)) -NoNewline
+    
+    for ($day = 1; $day -le $lastDayOfMonth.Day; $day++) {
+        $currentDate = Get-Date -Year $MonthToDisplay.Year -Month $MonthToDisplay.Month -Day $day
+        $dayOfWeek = [int]$currentDate.DayOfWeek
+        
+        $hours = if ($heatData.ContainsKey($day)) { $heatData[$day] } else { 0 }
+        $heatLevel = $heatLevels | Where-Object { $hours -ge $_.Min -and $hours -le $_.Max } | Select-Object -First 1
+        
+        if ($currentDate.Date -eq [DateTime]::Today.Date) {
+            Write-Host (Apply-PSStyle -Text "◉ " -FG "#FFFF00" -Bold) -NoNewline
+        } else {
+            Write-Host (Apply-PSStyle -Text "$($heatLevel.Char) " -FG $heatLevel.Color) -NoNewline
+        }
+        
+        if ($dayOfWeek -eq 6) {
+            Write-Host "│"
+            if ($day -lt $lastDayOfMonth.Day) { Write-Host "  │" -NoNewline }
+        }
+    }
+    
+    # Fill remaining spaces
+    $remainingDays = (6 - [int]$lastDayOfMonth.DayOfWeek)
+    if ($remainingDays -lt 6) {
+        Write-Host (" " * ($remainingDays * 3)) -NoNewline
+        Write-Host "│"
+    }
+    
+    Write-Host "  └──────────────────┘"
+    
+    # Legend
+    Write-Host "`n  Legend: " -NoNewline
+    foreach ($level in $heatLevels) {
+        Write-Host (Apply-PSStyle -Text $level.Char -FG $level.Color) -NoNewline
+        Write-Host " " -NoNewline
+    }
+    Write-Host "← Less ─ More →  " -NoNewline
+    Write-Host (Apply-PSStyle -Text "◉" -FG "#FFFF00") -NoNewline
+    Write-Host " Today"
+}
+
+#endregion
+
+#region Enhanced Menu with Icons
+
+function global:Show-MenuSelectionEnhanced {
+    param(
+        [string]$Title,
+        [hashtable[]]$Options, # Now expects @{Text=""; Icon=""; Key=""; Description=""}
+        [string]$PromptMessage = "Select option",
+        [switch]$ShowDescriptions
+    )
+    
+    Write-Header $Title
+    
+    if (-not $Options -or $Options.Count -eq 0) {
+        Write-Warning "No options available."
+        return $null
+    }
+    
+    $maxTextLength = ($Options | ForEach-Object { $_.Text.Length } | Measure-Object -Maximum).Maximum
+    
+    for ($i = 0; $i -lt $Options.Count; $i++) {
+        $opt = $Options[$i]
+        $key = if ($opt.Key) { $opt.Key } else { ($i + 1).ToString() }
+        $icon = if ($opt.Icon) { $opt.Icon } else { "•" }
+        
+        Write-Host "  " -NoNewline
+        Write-Host (Apply-PSStyle -Text "[$key]" -FG (Get-ThemeProperty "Palette.AccentFG") -Bold) -NoNewline
+        Write-Host " $icon " -NoNewline
+        Write-Host $opt.Text.PadRight($maxTextLength) -NoNewline
+        
+        if ($ShowDescriptions -and $opt.Description) {
+            Write-Host " - " -NoNewline
+            Write-Host (Apply-PSStyle -Text $opt.Description -FG (Get-ThemeProperty "Palette.SubtleFG"))
+        } else {
+            Write-Host
+        }
+    }
+    
+    Write-Host "`n  " -NoNewline
+    Write-Host (Apply-PSStyle -Text "[ESC]" -FG (Get-ThemeProperty "Palette.SubtleFG")) -NoNewline
+    Write-Host " Cancel"
+    
+    Write-Host "`n  $PromptMessage" -NoNewline
+    Write-Host (Apply-PSStyle -Text " > " -FG (Get-ThemeProperty "Palette.AccentFG") -Bold) -NoNewline
+    
+    $selection = Read-Host
+    
+    if ([string]::IsNullOrWhiteSpace($selection)) { return $null }
+    
+    $selectedOption = $Options | Where-Object { 
+        ($_.Key -and $_.Key -eq $selection) -or 
+        ($Options.IndexOf($_) -eq ([int]$selection - 1))
+    }
+    
+    return $selectedOption
+}
+
+#endregion
+
+#region Quick Actions Display
+
+function global:Show-QuickActions {
+    Write-Host "`n⚡ " -NoNewline
+    Write-Host (Apply-PSStyle -Text "QUICK ACTIONS" -FG (Get-ThemeProperty "Palette.WarningFG") -Bold)
+    
+    $quickActions = @(
+        @{ Key = "M"; Icon = "📝"; Text = "Manual Entry"; },
+        @{ Key = "S"; Icon = "▶️"; Text = "Start Timer"; },
+        @{ Key = "A"; Icon = "➕"; Text = "Add Task"; },
+        @{ Key = "V"; Icon = "👁️"; Text = "View Timers"; },
+        @{ Key = "T"; Icon = "📅"; Text = "Today View"; },
+        @{ Key = "W"; Icon = "📊"; Text = "Week Report"; }
+    )
+    
+    $actionsPerRow = 3
+    for ($i = 0; $i -lt $quickActions.Count; $i += $actionsPerRow) {
+        Write-Host "   " -NoNewline
+        for ($j = 0; $j -lt $actionsPerRow -and ($i + $j) -lt $quickActions.Count; $j++) {
+            $action = $quickActions[$i + $j]
+            Write-Host (Apply-PSStyle -Text "[$($action.Key)]" -FG (Get-ThemeProperty "Palette.InfoFG") -Bold) -NoNewline
+            Write-Host " $($action.Icon) $($action.Text)".PadRight(20) -NoNewline
+        }
+        Write-Host
+    }
+}
+
+function global:Show-MainMenu {
+    Write-Host "`n🎯 " -NoNewline
+    Write-Host (Apply-PSStyle -Text "MAIN MENU" -FG (Get-ThemeProperty "Palette.AccentFG") -Bold)
+    
+    $menuItems = @(
+        @{ Num = "1"; Icon = "⏰"; Text = "Time Management"; Color = "Palette.InfoFG" },
+        @{ Num = "2"; Icon = "📋"; Text = "Task Management"; Color = "Palette.SuccessFG" },
+        @{ Num = "3"; Icon = "📈"; Text = "Reports & Analytics"; Color = "Palette.WarningFG" },
+        @{ Num = "4"; Icon = "🏢"; Text = "Projects & Clients"; Color = "Palette.AccentFG" },
+        @{ Num = "5"; Icon = "🔧"; Text = "Tools & Utilities"; Color = "Palette.ErrorFG" },
+        @{ Num = "6"; Icon = "⚙️"; Text = "Settings & Config"; Color = "Palette.SubtleFG" }
+    )
+    
+    foreach ($item in $menuItems) {
+        Write-Host "   " -NoNewline
+        Write-Host (Apply-PSStyle -Text "[$($item.Num)]" -FG (Get-ThemeProperty $item.Color) -Bold) -NoNewline
+        Write-Host " $($item.Icon) " -NoNewline
+        Write-Host (Apply-PSStyle -Text $item.Text -FG (Get-ThemeProperty $item.Color))
+    }
+    
+    Write-Host "`n   " -NoNewline
+    Write-Host (Apply-PSStyle -Text "[Q]" -FG (Get-ThemeProperty "Palette.ErrorFG") -Bold) -NoNewline
+    Write-Host " 🚪 Quit"
+}
+
+#endregion
+
+#region Visual Notifications
+
+function global:Show-Notification {
+    param(
+        [string]$Message,
+        [string]$Type = "Info", # Info, Success, Warning, Error
+        [int]$Duration = 3000,
+        [switch]$Persist
+    )
+    
+    $icons = @{
+        "Info" = "ℹ️"
+        "Success" = "✅"
+        "Warning" = "⚠️"
+        "Error" = "❌"
+    }
+    
+    $colors = @{
+        "Info" = "Palette.InfoFG"
+        "Success" = "Palette.SuccessFG"
+        "Warning" = "Palette.WarningFG"
+        "Error" = "Palette.ErrorFG"
+    }
+    
+    $borderStyle = if ($Type -eq "Error") { "Heavy" } else { "Rounded" }
+    $border = Get-BorderStyleChars -Style $borderStyle
+    
+    $paddedMessage = " $($icons[$Type]) $Message "
+    $width = $paddedMessage.Length + 2
+    
+    # Top border
+    Write-Host "`n$($border.TopLeft)$($border.Horizontal * $width)$($border.TopRight)" -ForegroundColor (Get-ThemeProperty $colors[$Type])
+    
+    # Message
+    Write-Host "$($border.Vertical)" -NoNewline -ForegroundColor (Get-ThemeProperty $colors[$Type])
+    Write-Host (Apply-PSStyle -Text $paddedMessage -FG (Get-ThemeProperty $colors[$Type]) -Bold) -NoNewline
+    Write-Host "$($border.Vertical)" -ForegroundColor (Get-ThemeProperty $colors[$Type])
+    
+    # Bottom border
+    Write-Host "$($border.BottomLeft)$($border.Horizontal * $width)$($border.BottomRight)" -ForegroundColor (Get-ThemeProperty $colors[$Type])
+    
+    if (-not $Persist) {
+        Start-Sleep -Milliseconds $Duration
+        # Clear the notification (move cursor up and clear lines)
+        [Console]::SetCursorPosition(0, [Console]::CursorTop - 4)
+        Write-Host (" " * ($width + 4))
+        Write-Host (" " * ($width + 4))
+        Write-Host (" " * ($width + 4))
+        Write-Host (" " * ($width + 4))
+        [Console]::SetCursorPosition(0, [Console]::CursorTop - 4)
+    }
+}
+
+#endregion
+
+#region Task Priority Visualizer
+
+function global:Get-PriorityIndicator {
+    param([int]$Priority)
+    
+    switch ($Priority) {
+        1 { return @{ Icon = "🔥"; Color = "Palette.ErrorFG"; Text = "CRITICAL" } }
+        2 { return @{ Icon = "⚡"; Color = "Palette.WarningFG"; Text = "HIGH" } }
+        3 { return @{ Icon = "📌"; Color = "Palette.InfoFG"; Text = "MEDIUM" } }
+        4 { return @{ Icon = "📎"; Color = "Palette.SubtleFG"; Text = "LOW" } }
+        default { return @{ Icon = "○"; Color = "Palette.SubtleFG"; Text = "NONE" } }
+    }
+}
+
+#endregion
+
+#region Mini Charts
+
+function global:Draw-MiniBarChart {
+    param(
+        [decimal[]]$Values,
+        [string[]]$Labels,
+        [int]$Height = 5,
+        [int]$BarWidth = 3
+    )
+    
+    if ($Values.Count -eq 0) { return }
+    
+    $max = ($Values | Measure-Object -Maximum).Maximum
+    if ($max -eq 0) { $max = 1 }
+    
+    $bars = @("▁", "▂", "▃", "▄", "▅", "▆", "▇", "█")
+    
+    # Draw chart
+    for ($row = $Height; $row -gt 0; $row--) {
+        Write-Host "  " -NoNewline
+        for ($i = 0; $i -lt $Values.Count; $i++) {
+            $normalized = $Values[$i] / $max
+            $barHeight = [Math]::Floor($normalized * $Height)
+            
+            if ($barHeight -ge $row) {
+                $barIndex = [Math]::Min(7, [Math]::Floor(($barHeight - $row + 1) * 8 / $Height))
+                $char = $bars[$barIndex]
+                $color = if ($Values[$i] -ge ($max * 0.8)) { "Palette.SuccessFG" }
+                        elseif ($Values[$i] -ge ($max * 0.5)) { "Palette.WarningFG" }
+                        else { "Palette.InfoFG" }
+                Write-Host (Apply-PSStyle -Text ($char * $BarWidth) -FG (Get-ThemeProperty $color)) -NoNewline
+            } else {
+                Write-Host (" " * $BarWidth) -NoNewline
+            }
+            Write-Host " " -NoNewline
+        }
+        Write-Host
+    }
+    
+    # Draw labels
+    if ($Labels) {
+        Write-Host "  " -NoNewline
+        for ($i = 0; $i -lt [Math]::Min($Labels.Count, $Values.Count); $i++) {
+            Write-Host $Labels[$i].PadRight($BarWidth) -NoNewline
+            Write-Host " " -NoNewline
+        }
+        Write-Host
+    }
+}
+
+#endregion

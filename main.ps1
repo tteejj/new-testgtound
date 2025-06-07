@@ -1,0 +1,511 @@
+# Unified Productivity Suite v5.0 - Main Entry Point
+# PowerShell 7.2+ Recommended for full PSStyle support
+
+#region Module Loading
+
+# Get script directory
+$script:ModuleRoot = $PSScriptRoot
+if (-not $script:ModuleRoot) {
+    try { $script:ModuleRoot = Split-Path $MyInvocation.MyCommand.Path -Parent }
+    catch { Write-Error "Could not determine script root. Please run as a .ps1 file."; exit 1 }
+}
+
+# Initialize data structure first
+$script:Data = $null
+
+# Dot source modules in dependency order
+if (Test-Path "$script:ModuleRoot\helper.ps1") { . "$script:ModuleRoot\helper.ps1" }
+if (Test-Path "$script:ModuleRoot\fuzzy.ps1") { . "$script:ModuleRoot\fuzzy.ps1" }
+if (Test-Path "$script:ModuleRoot\core-data.ps1") { . "$script:ModuleRoot\core-data.ps1" }
+if (Test-Path "$script:ModuleRoot\theme.ps1") { . "$script:ModuleRoot\theme.ps1" }
+if (Test-Path "$script:ModuleRoot\ui.ps1") { . "$script:ModuleRoot\ui.ps1" }
+if (Test-Path "$script:ModuleRoot\core-time.ps1") { . "$script:ModuleRoot\core-time.ps1" }
+if (Test-Path "$script:ModuleRoot\multiline.ps1") { . "$script:ModuleRoot\multiline.ps1" }
+if (Test-Path "$script:ModuleRoot\fu.ps1") { . "$script:ModuleRoot\fu.ps1" }
+if (Test-Path "$script:ModuleRoot\fb.ps1") { . "$script:ModuleRoot\fb.ps1" }
+if (Test-Path "$script:ModuleRoot\command-palette.ps1") { . "$script:ModuleRoot\command-palette.ps1" }
+
+# Initialize systems in correct order
+if (Get-Command Load-UnifiedData -ErrorAction SilentlyContinue) {
+    Load-UnifiedData
+} else {
+    Write-Error "Load-UnifiedData function not available. Check helper.ps1."
+    exit 1
+}
+
+if (Get-Command Initialize-ThemeSystem -ErrorAction SilentlyContinue) {
+    Initialize-ThemeSystem
+}
+
+if (Get-Command Initialize-CommandRegistry -ErrorAction SilentlyContinue) {
+    Initialize-CommandRegistry
+}
+
+#endregion
+
+#region Quick Action System
+
+$script:QuickActionMap = @{
+    '9' = { Add-ManualTimeEntry; return $true }
+    's' = { Start-Timer; return $true }
+    'stop' = { Stop-Timer; return $true }
+    'a' = { Add-TodoTask; return $true }
+    'qa' = { $userInput = Read-Host "Quick add task details"; Quick-AddTask -InputString $userInput; return $true }
+    'v' = { Show-ActiveTimers; Write-Host "`nPress any key..."; $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown"); return $true }
+    't' = { Show-TodayView; return $true }
+    'tasks' = { Show-TaskManagementMenu; return $true }
+    'w' = { Show-WeekReport; Write-Host "`nPress Enter..."; Read-Host; return $true }
+    'p' = { Show-ProjectDetail; Write-Host "`nPress Enter..."; Read-Host; return $true }
+    'projects' = { Show-ProjectsMenu; return $true }
+    'c' = { Manage-CommandSnippets; return $true }
+    'r' = { Show-ReportsMenu; return $true }
+    'export' = { Export-FormattedTimesheet; return $true }
+    'h' = { Show-Help; return $true }
+    '?' = { Show-QuickActionHelp; return $true }
+    'cal' = { Show-Calendar; return $true }
+    '/' = { Invoke-CommandPalette; return $true }
+    'cp' = { Invoke-CommandPalette; return $true }
+    'fb' = { Start-TerminalFileBrowser; return $true }
+    'files' = { Start-TerminalFileBrowser; return $true }
+    'fuh' = { Show-FileUtilsHelp; return $true }
+}
+
+# Add aliases after the main map is created
+$script:QuickActionMap['m'] = $script:QuickActionMap['9']
+$script:QuickActionMap['time'] = $script:QuickActionMap['9']
+$script:QuickActionMap['timer'] = $script:QuickActionMap['s']
+$script:QuickActionMap['task'] = $script:QuickActionMap['a']
+$script:QuickActionMap['week'] = $script:QuickActionMap['w']
+$script:QuickActionMap['cmd'] = $script:QuickActionMap['c']
+$script:QuickActionMap['snippets'] = $script:QuickActionMap['c']
+$script:QuickActionMap['reports'] = $script:QuickActionMap['r']
+$script:QuickActionMap['timesheet'] = $script:QuickActionMap['export']
+$script:QuickActionMap['help'] = $script:QuickActionMap['h']
+
+function global:Process-QuickAction {
+    param([string]$Key)
+   
+    $action = $script:QuickActionMap[$Key.ToLower()]
+    if ($action) { 
+        Write-Info "Executing quick action: $Key"
+        return & $action 
+    }
+   
+    $matches = $script:QuickActionMap.Keys | Where-Object { $_ -like "$($Key.ToLower())*" }
+    if ($matches.Count -eq 1) { 
+        Write-Info "Executing quick action: $($matches[0])"
+        return & $script:QuickActionMap[$matches[0]] 
+    }
+    elseif ($matches.Count -gt 1) { 
+        Write-Warning "Ambiguous quick action '$Key'. Matches: $($matches -join ', ')"
+        Write-Host "Did you mean one of these? Use the full keyword." -ForegroundColor Gray
+        return $true 
+    }
+   
+    Write-Warning "Unknown quick action: '$Key'. Use +? to see all available actions."
+    return $false
+}
+
+function global:Show-QuickActionHelp {
+    Write-Header "Quick Actions Help (+Key)"
+    Write-Host "Use '+' followed by a keyword from any prompt:" -ForegroundColor Gray; Write-Host ""
+   
+    $actionHelp = @(
+        @{ Category="Core"; Actions=@("/, cp: Open Command Palette", "h, help: Main help screen", "?: This quick action help")},
+        @{ Category="Time"; Actions=@("9, m, time: Manual time entry", "s, timer: Start timer", "stop: Stop timer")},
+        @{ Category="Task"; Actions=@("a, task: Add full task", "qa: Quick add task", "t: Today's View", "tasks: Full Task Menu")},
+        @{ Category="Views & Reports"; Actions=@("v: View active timers", "w, week: Week report", "timesheet: Export timesheet", "r, reports: Reports Menu", "cal: Calendar")},
+        @{ Category="Project"; Actions=@("p: Project details", "projects: Projects Menu")},
+        @{ Category="Snippets"; Actions=@("c, cmd, snippets: Command snippets")},
+        @{ Category="Files"; Actions=@("fb, files: Open File Browser", "fuh: File Utilities Help")}
+    )
+    foreach($cat in $actionHelp){
+        Write-Host "$($cat.Category):" -ForegroundColor Yellow
+        foreach($act in $cat.Actions){ Write-Host "  +$act"}
+        Write-Host ""
+    }
+    Write-Host "`nPress any key to continue..."
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
+
+#endregion
+
+#region Menu Structure & Functions
+
+function global:Show-ProjectsMenu { # Wrapper for Projects & Clients submenu
+    while ($true) {
+        if (Get-Command -Name Show-ProjectsAndTemplates -ErrorAction SilentlyContinue) {
+            Show-ProjectsAndTemplates # Display list before menu options
+        } else {
+            Write-Warning "Show-ProjectsAndTemplates function not found. Cannot display project list."
+        }
+        Write-Host ""
+        if (Show-Menu $script:MenuStructure["Projects & Clients"]) { break }
+    }
+}
+
+function global:Show-ReportsMenu { # Wrapper for Reports & Analytics submenu
+     while ($true) {
+        if (Show-Menu $script:MenuStructure["Reports & Analytics"]) { break }
+    }
+}
+
+function global:Show-ExcelIntegrationMenu { # Placeholder
+    Write-Header "Excel Integration"
+    Write-Warning "Excel Copy Jobs feature is not fully implemented in this version."
+    Write-Host "[1] Configure Excel Form Import Mapping (for Projects)"
+    Write-Host "[B] Back"
+    $choice = Read-Host "Choice"
+    if($choice -eq "1"){ Configure-ExcelForm }
+}
+
+function global:Show-FileUtilitiesMenu {
+    while ($true) {
+        Write-Header "File Utilities"
+        Write-Host "Here you can access various file and directory management tools."
+        Write-Host "`n[1] Show File (sf)           - Preview file content"
+        Write-Host "[2] Find File (ff)           - Interactive file search"
+        Write-Host "[3] Show Directory Tree (st) - Visual directory structure"
+        Write-Host "[4] Get Directory Stats (ds) - Detailed folder statistics"
+        Write-Host "[5] Show Excel (se)          - View Excel file in terminal"
+        Write-Host "[6] Compare Files (cf)       - Compare two files"
+        Write-Host "[7] Rename Batch (rb)        - Batch rename files"
+        Write-Host "[8] Fuzzy File Search (fz)   - Search for approximate text in files"
+        Write-Host "[H]elp (fuh)                 - Show full utilities help"
+        Write-Host "`n[B] Back to Tools Menu"
+
+        $choice = Read-Host "`nChoice"
+        $actionTaken = $true
+
+        switch ($choice.ToLower()) {
+            "1" { $path = Read-Host "Enter file path"; if($path){Show-File -Path $path -All} }
+            "2" { Find-File -Interactive }
+            "3" { $path = Read-Host "Enter directory path (or . for current)"; if(-not $path){$path="."}; Show-Tree -Path $path -ShowFiles -ShowSize }
+            "4" { $path = Read-Host "Enter directory path (or . for current)"; if(-not $path){$path="."}; Get-DirectoryStats -Path $path -Detailed }
+            "5" { $path = Read-Host "Enter Excel file path"; if($path){Show-Excel -Path $path -All} }
+            "6" { $file1 = Read-Host "Enter File 1 path"; $file2 = Read-Host "Enter File 2 path"; if($file1 -and $file2){Compare-Files -File1 $file1 -File2 $file2 -SideBySide} }
+            "7" { Write-Warning "This is a powerful tool. Use -Preview first!"; Rename-Batch -Preview; $confirm = Read-Host "Proceed with actual rename? (Y/N)"; if($confirm.ToUpper() -eq 'Y'){Rename-Batch} }
+            "8" { Search-FuzzyText -Interactive } # Launch interactive fuzzy search
+            "h" { Show-FileUtilsHelp }
+            "b" { return }
+            default {
+                if (-not [string]::IsNullOrEmpty($choice)) { Write-Warning "Unknown command." }
+                $actionTaken = $false
+            }
+        }
+        if ($actionTaken) { Write-Host "`nPress Enter to continue..."; Read-Host }
+    }
+}
+
+$script:MenuStructure = @{
+    "Time Management" = @{ Header = "Time Management"; Options = @(
+        @{Key="1"; Label="Manual Time Entry"; Action={Add-ManualTimeEntry}}
+        @{Key="2"; Label="Start Timer"; Action={Start-Timer}}
+        @{Key="3"; Label="Stop Timer"; Action={Stop-Timer}}
+        @{Key="4"; Label="View Active Timers"; Action={ Show-ActiveTimers }}
+        @{Key="5"; Label="Quick Time Entry"; Action={ Quick-TimeEntry }}
+        @{Key="6"; Label="Edit Time Entry"; Action={Edit-TimeEntry}}
+        @{Key="7"; Label="Delete Time Entry"; Action={Delete-TimeEntry}}
+        @{Key="8"; Label="Today's Full Time Log"; Action={Show-TodayTimeLog}}
+        @{Key="9"; Label="Export Formatted Timesheet"; Action={Export-FormattedTimesheet}}
+    )}
+    "Task Management" = @{ Header = "Task Management"; Action = {Show-TaskManagementMenu} } # Direct action
+    "Reports & Analytics" = @{ Header = "Reports & Analytics"; Options = @(
+        @{Key="1"; Label="Week Report (Tab-Delimited)"; Action={Show-WeekReport}}
+        @{Key="2"; Label="Extended Week Report (Detailed)"; Action={Show-ExtendedReport}}
+        @{Key="3"; Label="Month Summary Report"; Action={Show-MonthSummary}}
+        @{Key="4"; Label="Project Summary Report"; Action={Show-ProjectSummary}}
+        @{Key="5"; Label="Task Analytics"; Action={Show-TaskAnalytics}}
+        @{Key="6"; Label="Time Analytics"; Action={Show-TimeAnalytics}}
+        @{Key="7"; Label="Export All Data (JSON & CSVs)"; Action={Export-AllData}}
+        @{Key="8"; Label="Formatted Timesheet (CSV for current week)"; Action={Export-FormattedTimesheet}}
+        @{Key="9"; Label="Change Report Week"; Action={Change-ReportWeek}}
+    )}
+    "Projects & Clients" = @{ Header = "Projects & Clients"; Options = @(
+        @{Key="1"; Label="Add New Project"; Action={Add-Project}}
+        @{Key="2"; Label="Import Project from Excel Form"; Action={Import-ProjectFromExcel}}
+        @{Key="3"; Label="View Project/Template Details"; Action={Show-ProjectDetail}}
+        @{Key="4"; Label="Edit Existing Project"; Action={Edit-Project}}
+        @{Key="5"; Label="Configure Excel Form Import Mapping"; Action={Configure-ExcelForm}}
+        @{Key="7"; Label="Export All Projects (CSV)"; Action={Export-Projects}}
+    )}
+    "Tools & Utilities" = @{ Header = "Tools & Utilities"; Options = @(
+        @{Key="1"; Label="Command Palette"; Action={Invoke-CommandPalette}}
+        @{Key="2"; Label="Command Snippets Manager"; Action={Manage-CommandSnippets}}
+        @{Key="3"; Label="File Browser"; Action={Start-TerminalFileBrowser}}
+        @{Key="4"; Label="File Utilities Menu"; Action={Show-FileUtilitiesMenu}}
+        @{Key="5"; Label="View Calendar"; Action={Show-Calendar}}
+        @{Key="6"; Label="Backup Data Now"; Action={ Backup-Data }}
+        @{Key="7"; Label="Test Excel COM Connection"; Action={Test-ExcelConnection}}
+        @{Key="8"; Label="Quick Actions Help (+?)"; Action={Show-QuickActionHelp}}
+    )}
+    "Settings & Config" = @{ Header = "Settings & Configuration"; Options = @(
+        @{Key="1"; Label="Time Tracking Settings"; Action={Edit-TimeTrackingSettings}}
+        @{Key="2"; Label="Task Management Settings"; Action={Edit-TaskSettings}}
+        @{Key="3"; Label="Excel Form Import Configuration"; Action={Configure-ExcelForm}}
+        @{Key="4"; Label="Theme & Appearance Settings"; Action={Edit-ThemeSettings}}
+        @{Key="5"; Label="Command Snippet Settings"; Action={Edit-CommandSnippetSettings}}
+        @{Key="6"; Label="Export All Application Data"; Action={Export-AllData}}
+        @{Key="7"; Label="Import Application Data"; Action={Import-Data}}
+        @{Key="8"; Label="Restore Data from Backup"; Action={Restore-FromBackup}}
+        @{Key="9"; Label="Reset All Settings to Defaults"; Action={Reset-ToDefaults}}
+    )}
+}
+
+#endregion
+
+#region Main Functions
+
+function global:Show-Menu {
+    param($MenuConfig)
+   
+    Write-Header $MenuConfig.Header
+   
+    if ($MenuConfig.Options) {
+        foreach ($option in $MenuConfig.Options) { Write-Host "[$($option.Key)] $($option.Label)" }
+        Write-Host "`n[B] Back to Dashboard"
+       
+        $choice = Read-Host "`nChoice"
+       
+        if ($choice.ToUpper() -eq 'B') { return $true } # Indicate to go back
+       
+        $selectedOption = $MenuConfig.Options | Where-Object { $_.Key -eq $choice }
+        if ($selectedOption) {
+            & $selectedOption.Action
+            Write-Host "`nPress Enter to continue..." ; Read-Host
+        } else { Write-Warning "Invalid choice."; Start-Sleep -Seconds 1 }
+        return $false # Indicate to stay in menu
+    } elseif ($MenuConfig.Action) {
+        & $MenuConfig.Action
+        return $true # Assume direct action menus return to dashboard afterwards
+    }
+    Write-Warning "Menu configuration error for $($MenuConfig.Header)."
+    return $true # Error, go back
+}
+
+function global:Show-MainMenu {
+    while ($true) {
+        Show-Dashboard
+        
+        Write-Host "`nCommand: " -NoNewline -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.WarningFG"))
+        $choice = Read-Host
+       
+        # Handle quick actions first
+        if ($choice -match '^\+(.+)') {
+            if (Process-QuickAction $matches[1]) {
+                Write-Host "`nPress Enter to continue..."; Read-Host
+            }
+            continue
+        }
+       
+        $actionTakenRequiresPause = $false
+        switch ($choice.ToUpper()) {
+            # Direct Actions
+            "M" { Add-ManualTimeEntry; $actionTakenRequiresPause = $true }
+            "S" { Start-Timer; $actionTakenRequiresPause = $true }
+            "A" { Add-TodoTask; $actionTakenRequiresPause = $true }
+            "V" { Show-ActiveTimers; $actionTakenRequiresPause = $true }
+            "T" { Show-TodayView; $actionTakenRequiresPause = $true }
+            "W" { Show-WeekReport; $actionTakenRequiresPause = $true }
+            "P" { Show-ProjectDetail; $actionTakenRequiresPause = $true }
+            "H" { Show-Help; $actionTakenRequiresPause = $true }
+            "/" { Invoke-CommandPalette; $actionTakenRequiresPause = $true }
+           
+            # Menus
+            "1" { while (-not (Show-Menu $script:MenuStructure["Time Management"])) { } }
+            "2" { Show-TaskManagementMenu }
+            "3" { Show-ReportsMenu }
+            "4" { Show-ProjectsMenu }
+            "5" { while (-not (Show-Menu $script:MenuStructure["Tools & Utilities"])) { } }
+            "6" { while ($true) { Show-CurrentSettings; if (Show-Menu $script:MenuStructure["Settings & Config"]) { break } } }
+           
+            # Quit
+            "Q" {
+                if ($script:Data.ActiveTimers -and $script:Data.ActiveTimers.Count -gt 0) {
+                    Write-Warning "You have $($script:Data.ActiveTimers.Count) active timer(s) running!"
+                    if ((Read-Host "Stop all timers before quitting? (Y/N)").ToUpper() -eq 'Y') {
+                        foreach ($key in @($script:Data.ActiveTimers.Keys)) { Stop-SingleTimer -Key $key -Silent }
+                        Save-UnifiedData
+                    }
+                }
+                Save-UnifiedData
+                Write-Host "`n👋 Thanks for using Unified Productivity Suite!" -ForegroundColor Cyan
+                Write-Host "Stay productive! 🚀" -ForegroundColor Yellow
+                return
+            }
+            default {
+                if ($choice -match '^q\s+(.+)') { Quick-TimeEntry $choice.Substring(2); $actionTakenRequiresPause = $true }
+                elseif ($choice -match '^qa\s+(.+)') { Quick-AddTask -InputString $choice.Substring(3); $actionTakenRequiresPause = $true }
+                elseif (-not [string]::IsNullOrEmpty($choice)) {
+                    Write-Warning "Unknown command. Press [H] for help, or '/' for the Command Palette."
+                    Start-Sleep -Seconds 1
+                }
+            }
+        }
+        if ($actionTakenRequiresPause) { Write-Host "`nPress Enter to continue..."; Read-Host }
+    }
+}
+
+function global:Show-TodayView {
+    Write-Header "Today's Overview - $((Get-Date).ToString('dddd, MMMM dd, yyyy'))"
+   
+    $todayStr = (Get-Date).ToString("yyyy-MM-dd")
+    $todayHours = 0.0
+    if ($script:Data.TimeEntries) {
+        $todayEntries = $script:Data.TimeEntries | Where-Object { $_.Date -eq $todayStr }
+        $todayHours = ($todayEntries | Measure-Object -Property Hours -Sum).Sum
+        $todayHours = if ($todayHours) { [Math]::Round($todayHours, 2) } else { 0.0 }
+    }
+   
+    Write-Host "⏱️  TIME LOGGED TODAY: " -NoNewline -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.WarningFG"))
+    Write-Host "$todayHours hours" -NoNewline
+    $targetHours = $script:Data.Settings.HoursPerDay
+    $percent = if ($targetHours -gt 0) { [Math]::Round(($todayHours / $targetHours) * 100, 0) } else { 0 }
+    Write-Host " ($percent% of $targetHours hour target)" -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.SubtleFG"))
+    
+    if ($script:Data.ActiveTimers -and $script:Data.ActiveTimers.Count -gt 0) {
+        Write-Host "`n⏰ ACTIVE TIMERS:" -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.ErrorFG"))
+        foreach ($timer in $script:Data.ActiveTimers.GetEnumerator()) {
+            $elapsed = (Get-Date) - [DateTime]$timer.Value.StartTime
+            $project = Get-ProjectOrTemplate $timer.Value.ProjectKey
+            $projectName = if($project){$project.Name}else{"Unknown"}
+            $hours = [Math]::Floor($elapsed.TotalHours)
+            $minutes = $elapsed.ToString('mm\:ss')
+            Write-Host "   → $projectName ${hours}:${minutes}" -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.InfoFG"))
+        }
+    }
+   
+    $today = [DateTime]::Today.Date
+    $overdueTasks = $script:Data.Tasks | Where-Object { (-not $_.Completed) -and ($_.IsCommand -ne $true) -and (-not [string]::IsNullOrEmpty($_.DueDate)) -and ([datetime]::Parse($_.DueDate).Date -lt $today) }
+    $dueTodayTasks = $script:Data.Tasks | Where-Object { (-not $_.Completed) -and ($_.IsCommand -ne $true) -and (-not [string]::IsNullOrEmpty($_.DueDate)) -and ([datetime]::Parse($_.DueDate).Date -eq $today) }
+   
+    if ($overdueTasks.Count -gt 0) {
+        Write-Host "`n⚠️  OVERDUE TASKS ($($overdueTasks.Count)):" -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.ErrorFG"))
+        foreach ($task in $overdueTasks | Sort-Object @{Expression={if([string]::IsNullOrEmpty($_.DueDate)) {[DateTime]::MaxValue} else {[DateTime]::Parse($_.DueDate)}}}, Priority | Select-Object -First 5) {
+            Show-TaskItemCompact $task
+        }
+        if ($overdueTasks.Count -gt 5) { Write-Host "   ... and $($overdueTasks.Count - 5) more" -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.SubtleFG")) }
+    }
+   
+    if ($dueTodayTasks.Count -gt 0) {
+        Write-Host "`n📋 TASKS DUE TODAY ($($dueTodayTasks.Count)):" -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.WarningFG"))
+        foreach ($task in $dueTodayTasks | Sort-Object Priority) { Show-TaskItemCompact $task }
+    } elseif ($overdueTasks.Count -eq 0) {
+        Write-Host "`n✅ No tasks overdue or due today!" -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.SuccessFG"))
+    }
+   
+    $inProgressTasks = $script:Data.Tasks | Where-Object { (-not $_.Completed) -and ($_.IsCommand -ne $true) -and ($_.Progress -gt 0) -and ($_.Progress -lt 100) }
+    if ($inProgressTasks.Count -gt 0) {
+        Write-Host "`n🔄 IN PROGRESS TASKS ($($inProgressTasks.Count)):" -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.InfoFG"))
+        foreach ($task in $inProgressTasks | Sort-Object -Descending Progress | Select-Object -First 3) {
+            Show-TaskItemCompact $task
+            Draw-ProgressBar -Percent $task.Progress; Write-Host ""
+        }
+    }
+   
+    $recentCommands = Get-RecentCommandSnippets -Count 3
+    if ($recentCommands.Count -gt 0) {
+        Write-Host "`n💡 RECENT COMMAND SNIPPETS:" -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.AccentFG"))
+        foreach ($cmd in $recentCommands) {
+            Write-Host "   [$($cmd.Id.Substring(0,6))] $($cmd.Description)" -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.PrimaryFG"))
+            if ($cmd.Hotkey) { Write-Host "         Hotkey: $($cmd.Hotkey)" -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.SubtleFG")) }
+        }
+    }
+}
+
+function global:Show-TaskItemCompact {
+    param($Task)
+   
+    $priorityInfo = Get-PriorityInfo $Task.Priority
+    Write-Host "   $(Apply-PSStyle -Text $priorityInfo.Icon -FG $priorityInfo.Color) " -NoNewline
+   
+    $taskText = "[$($Task.Id.Substring(0,6))] $($Task.Description)"
+    if ($Task.Completed) {
+        Write-Host (Apply-PSStyle -Text $taskText -FG (Get-ThemeProperty "Palette.SubtleFG"))
+    } else {
+        $status = Get-TaskStatus $Task
+        $color = switch ($status) {
+            "Overdue" { Get-ThemeProperty "Palette.ErrorFG" }
+            "Due Today" { Get-ThemeProperty "Palette.WarningFG" }
+            "Due Soon" { Get-ThemeProperty "Palette.InfoFG" }
+            "In Progress" { Get-ThemeProperty "Palette.InfoFG" }
+            default { Get-ThemeProperty "Palette.PrimaryFG" }
+        }
+        Write-Host (Apply-PSStyle -Text $taskText -FG $color)
+    }
+   
+    if ($Task.ProjectKey) {
+        $project = Get-ProjectOrTemplate $Task.ProjectKey
+        if ($project) { Write-Host "      Project: $($project.Name)" -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.SubtleFG")) }
+    }
+}
+
+function global:Change-ReportWeek {
+    Write-Host "Current report week starts: $($script:Data.CurrentWeek.ToString('yyyy-MM-dd'))"
+    Write-Host "[P]revious Week, [N]ext Week, [T]his Week, or enter a date (YYYY-MM-DD) for the week to view: " -NoNewline
+    $navChoice = Read-Host
+   
+    $newWeekStart = $script:Data.CurrentWeek
+    switch ($navChoice.ToUpper()) {
+        'P' { $newWeekStart = $script:Data.CurrentWeek.AddDays(-7) }
+        'N' { $newWeekStart = $script:Data.CurrentWeek.AddDays(7) }
+        'T' { $newWeekStart = Get-WeekStart (Get-Date) }
+        default {
+            try {
+                $inputDate = [DateTime]::Parse($navChoice)
+                $newWeekStart = Get-WeekStart $inputDate
+            } catch { Write-Error "Invalid date format '$navChoice'. Report week not changed." ; return }
+        }
+    }
+    $script:Data.CurrentWeek = $newWeekStart
+    Save-UnifiedData
+    Write-Success "Report week changed to start: $($script:Data.CurrentWeek.ToString('yyyy-MM-dd'))"
+}
+
+function global:Show-CurrentSettings {
+    Write-Header "Current Application Settings Summary"
+    $s = $script:Data.Settings
+    Write-Host "Time Tracking:" -ForegroundColor Yellow
+    Write-Host "  Default Rate: $($s.DefaultRate)/$($s.Currency), Target: $($s.HoursPerDay)h/day, $($s.DaysPerWeek) days/week"
+    Write-Host "Task Management:" -ForegroundColor Yellow
+    Write-Host "  Default Priority: $($s.DefaultPriority), Default Category: $($s.DefaultCategory)"
+    Write-Host "  Show Completed (Active Views): Last $($s.ShowCompletedDays) days, Auto-Archive After: $($s.AutoArchiveDays) days"
+    Write-Host "Command Snippets:" -ForegroundColor Yellow
+    Write-Host "  Hotkeys: $(if($s.CommandSnippets.EnableHotkeys){'Enabled (external binding)'}else{'Disabled'}), Auto-Copy: $(if($s.CommandSnippets.AutoCopyToClipboard){'Yes'}else{'No'})"
+    Write-Host "  Show in Task List: $(if($s.CommandSnippets.ShowInTaskList){'Yes'}else{'No'}), Default Category: $($s.CommandSnippets.DefaultCategory)"
+    Write-Host "Theme:" -ForegroundColor Yellow
+    if ($script:CurrentTheme) {
+        Write-Host "  Active Theme: $($script:CurrentTheme.Name) - $($script:CurrentTheme.Description)" -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.AccentFG"))
+    } else {
+        Write-Host "  Current Legacy Theme Colors (used by Write-Host -FG):"
+        foreach($colorKey in $s.Theme.Keys){ Write-Host "    $colorKey = $($s.Theme[$colorKey])"}
+    }
+    Write-Host ""
+}
+
+function global:Start-UnifiedProductivitySuite {
+    Write-Host ("-"*30) + " Unified Productivity Suite v5.0 " + ("-"*30) -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.HeaderFG"))
+    Write-Host "Initializing..." -ForegroundColor (Get-LegacyColor (Get-ThemeProperty "Palette.SubtleFG"))
+   
+    if (-not $script:Data) {
+        $script:Data = @{
+            Projects = @{}; Tasks = @(); TimeEntries = @(); ActiveTimers = @{}; ArchivedTasks = @()
+            ExcelCopyJobs = @{}; CurrentWeek = (Get-WeekStart (Get-Date)); Settings = (Get-DefaultSettings)
+        }
+    }
+   
+    if (-not $script:Data.Settings.QuickActionTipShown) {
+        Write-Host "`nTIP: Use '/' for the Command Palette, or '+' for quick actions (e.g., +task, +help)" -ForegroundColor Yellow
+        Write-Host "     Try '+?' to see all available quick actions." -ForegroundColor Gray
+        $script:Data.Settings.QuickActionTipShown = $true
+        Save-UnifiedData
+        Start-Sleep -Seconds 3
+    }
+   
+    Show-MainMenu
+}
+
+#endregion
+
+# Entry point
+Start-UnifiedProductivitySuite

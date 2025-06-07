@@ -1,0 +1,231 @@
+# Helper Functions Module
+# Utility functions for file I/O, date handling, validation, etc.
+
+#region Configuration
+
+$script:DataPath = Join-Path $env:USERPROFILE ".ProductivitySuite"
+$script:UnifiedDataFile = Join-Path $script:DataPath "unified_data.json"
+$script:BackupPath = Join-Path $script:DataPath "backups"
+@($script:DataPath, $script:BackupPath) | ForEach-Object { if (-not (Test-Path $_)) { New-Item -ItemType Directory -Path $_ -Force | Out-Null } }
+
+#endregion
+
+#region PowerShell 5.1 Compatibility Functions
+
+function global:ConvertFrom-JsonToHashtable {
+    param([string]$JsonString)
+    function Convert-PSObjectToHashtable {
+        param($InputObject)
+        if ($null -eq $InputObject) { return $null }
+        if ($InputObject -is [PSCustomObject]) {
+            $hashtable = @{}; $InputObject.PSObject.Properties | ForEach-Object { $hashtable[$_.Name] = Convert-PSObjectToHashtable $_.Value }; return $hashtable
+        } elseif ($InputObject -is [array]) {
+            return @($InputObject | ForEach-Object { Convert-PSObjectToHashtable $_ })
+        } else { return $InputObject }
+    }
+    $psobject = $JsonString | ConvertFrom-Json; return Convert-PSObjectToHashtable $psobject
+}
+
+#endregion
+
+#region Data Persistence
+
+function global:Load-UnifiedData {
+    try {
+        if (Test-Path $script:UnifiedDataFile) {
+            $jsonContent = Get-Content $script:UnifiedDataFile -Raw
+            $loadedData = ConvertFrom-JsonToHashtable $jsonContent
+            if (-not $script:Data) { Write-Error "CRITICAL: \$script:Data not initialized."; $script:Data = @{ Settings = (Get-DefaultSettings); Projects = @{}; Tasks = @(); TimeEntries = @(); ActiveTimers = @{}; ArchivedTasks = @{}; ExcelCopyJobs = @{}; CurrentWeek = (Get-WeekStart (Get-Date)) } } elseif (-not $script:Data.Settings) { $script:Data.Settings = (Get-DefaultSettings) }
+            foreach ($topLevelKey in $loadedData.Keys) {
+                if ($topLevelKey -eq "Settings") {
+                    if ($loadedData.Settings -is [hashtable] -and $script:Data.Settings -is [hashtable]) {
+                        $defaultSettings = Get-DefaultSettings
+                        foreach ($settingKey in $defaultSettings.Keys) {
+                            if ($loadedData.Settings.ContainsKey($settingKey)) {
+                                if ($settingKey -eq "Theme" -and $loadedData.Settings.Theme -is [hashtable] -and $defaultSettings.Theme -is [hashtable]) { foreach ($themeColorKey in $defaultSettings.Theme.Keys) { if ($loadedData.Settings.Theme.ContainsKey($themeColorKey)) { $script:Data.Settings.Theme[$themeColorKey] = $loadedData.Settings.Theme[$themeColorKey] } } }
+                                elseif ($settingKey -eq "TimeTrackerTemplates" -and $loadedData.Settings.TimeTrackerTemplates -is [hashtable]) { $script:Data.Settings.TimeTrackerTemplates = $loadedData.Settings.TimeTrackerTemplates }
+                                elseif ($settingKey -eq "CommandSnippets" -and $loadedData.Settings.CommandSnippets -is [hashtable]) { foreach($csKey in $defaultSettings.CommandSnippets.Keys){ if($loadedData.Settings.CommandSnippets.ContainsKey($csKey)){ $script:Data.Settings.CommandSnippets[$csKey] = $loadedData.Settings.CommandSnippets[$csKey] } } }
+                                elseif ($settingKey -eq "ExcelFormConfig" -and $loadedData.Settings.ExcelFormConfig -is [hashtable]) { if ($loadedData.Settings.ExcelFormConfig.WorksheetName) { $script:Data.Settings.ExcelFormConfig.WorksheetName = $loadedData.Settings.ExcelFormConfig.WorksheetName } else { $script:Data.Settings.ExcelFormConfig.WorksheetName = $defaultSettings.ExcelFormConfig.WorksheetName }; foreach($fieldKey in $defaultSettings.ExcelFormConfig.StandardFields.Keys){ if($loadedData.Settings.ExcelFormConfig.StandardFields.ContainsKey($fieldKey)){ $script:Data.Settings.ExcelFormConfig.StandardFields[$fieldKey] = $loadedData.Settings.ExcelFormConfig.StandardFields[$fieldKey] } } }
+                                else { $script:Data.Settings[$settingKey] = $loadedData.Settings[$settingKey] }
+                            }
+                        }
+                    } else { Write-Warning "Loaded 'Settings' data is invalid. Keeping defaults."; $script:Data.Settings = (Get-DefaultSettings) }
+                } elseif ($script:Data.ContainsKey($topLevelKey)) { $script:Data[$topLevelKey] = $loadedData[$topLevelKey] }
+            }
+            if ($script:Data.CurrentWeek -is [string]) { try { $script:Data.CurrentWeek = [DateTime]::Parse($script:Data.CurrentWeek) } catch { Write-Warning "Could not parse CurrentWeek. Resetting."; $script:Data.CurrentWeek = Get-WeekStart (Get-Date) } } elseif ($null -eq $script:Data.CurrentWeek) { $script:Data.CurrentWeek = Get-WeekStart (Get-Date) }
+        } else { Write-Info "No existing data file found. Starting with defaults." }
+    } catch { Write-Warning "Could not load data, starting fresh: $_"; $script:Data = @{ Settings = (Get-DefaultSettings); Projects = @{}; Tasks = @(); TimeEntries = @(); ActiveTimers = @{}; ArchivedTasks = @{}; ExcelCopyJobs = @{}; CurrentWeek = (Get-WeekStart (Get-Date)) } }
+}
+
+function global:Save-UnifiedData {
+    try {
+        if ((Get-Random -Maximum 10) -eq 0 -or -not (Test-Path $script:UnifiedDataFile)) { Backup-Data -Silent }
+        $script:Data | ConvertTo-Json -Depth 10 | Set-Content $script:UnifiedDataFile -Encoding UTF8
+    } catch { Write-Error "Failed to save data: $_" }
+}
+
+function global:Backup-Data {
+    param([switch]$Silent)
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $backupFile = Join-Path $script:BackupPath "backup_$timestamp.json"
+    try {
+        $script:Data | ConvertTo-Json -Depth 10 | Set-Content $backupFile -Encoding UTF8
+        if (-not $Silent) { Write-Success "Backup created: $backupFile" }
+        Get-ChildItem $script:BackupPath -Filter "backup_*.json" | Sort-Object CreationTime -Descending | Select-Object -Skip 30 | Remove-Item -Force
+    } catch { Write-Error "Backup failed: $_" }
+}
+
+function global:Restore-FromBackup {
+    Write-Header "Restore from Backup"
+    $backups = Get-ChildItem $script:BackupPath -Filter "backup_*.json" | Sort-Object CreationTime -Descending
+    if ($backups.Count -eq 0) { Write-Warning "No backups found"; return }
+    Write-Host "Available backups:"
+    for ($i = 0; $i -lt $backups.Count; $i++) { $backupItem = $backups[$i]; $date = $backupItem.CreationTime.ToString("yyyy-MM-dd HH:mm:ss"); $size = [Math]::Round($backupItem.Length / 1KB, 2); Write-Host "  [$i] $date ($size KB)" }
+    $indexInput = Read-Host "`nSelect backup number"; try { $idx = [int]$indexInput; if ($idx -ge 0 -and $idx -lt $backups.Count) { $selectedBackup = $backups[$idx]; Write-Warning "This will replace all current data! Type 'yes' to confirm"; if ((Read-Host) -eq 'yes') { Backup-Data -Silent; $jsonContent = Get-Content $selectedBackup.FullName -Raw; $backupData = ConvertFrom-JsonToHashtable $jsonContent; $script:Data = $backupData; if ($script:Data.CurrentWeek -is [string]) { try { $script:Data.CurrentWeek = [DateTime]::Parse($script:Data.CurrentWeek) } catch { $script:Data.CurrentWeek = Get-WeekStart (Get-Date) } } elseif ($null -eq $script:Data.CurrentWeek) { $script:Data.CurrentWeek = Get-WeekStart (Get-Date) }; $defaultSettings = Get-DefaultSettings; if (-not $script:Data.Settings -or -not ($script:Data.Settings -is [hashtable])) { $script:Data.Settings = $defaultSettings } else { foreach($key in $defaultSettings.Keys){ if(-not $script:Data.Settings.ContainsKey($key)){ $script:Data.Settings[$key] = $defaultSettings[$key] } elseif ($defaultSettings[$key] -is [hashtable] -and $script:Data.Settings[$key] -is [hashtable]) { foreach($subKey in $defaultSettings[$key].Keys){ if(-not $script:Data.Settings[$key].ContainsKey($subKey)){ $script:Data.Settings[$key][$subKey] = $defaultSettings[$key][$subKey] } } } } }; Save-UnifiedData; Initialize-ThemeSystem; Write-Success "Data restored from backup!"; Write-Info "A backup of your previous data was created." } else { Write-Info "Restore cancelled." } } else { Write-Error "Invalid selection." } } catch { Write-Error "Invalid selection input: $_" }
+}
+
+#endregion
+
+#region ID Generation
+
+function global:New-TodoId { return [System.Guid]::NewGuid().ToString().Substring(0, 8) }
+function global:Format-Id2 {
+    param([string]$Id2Input)
+    $id2ToFormat = if ([string]::IsNullOrEmpty($Id2Input)) { "" } else { $Id2Input }
+    if ($id2ToFormat.Length -gt 9) { $id2ToFormat = $id2ToFormat.Substring(0, 9) }
+    $paddingNeeded = 12 - 2 - $id2ToFormat.Length; $zeros = "0" * [Math]::Max(0, $paddingNeeded)
+    return "V${zeros}${id2ToFormat}S"
+}
+
+#endregion
+
+#region Date Functions
+
+function global:Get-WeekStart {
+    param([DateTime]$DateInput = (Get-Date))
+    $daysFromMonday = [int]$DateInput.DayOfWeek
+    if ($daysFromMonday -eq 0) { $daysFromMonday = 7 }
+    $monday = $DateInput.AddDays(1 - $daysFromMonday)
+    return Get-Date $monday -Hour 0 -Minute 0 -Second 0
+}
+
+function global:Get-WeekDates {
+    param([DateTime]$WeekStartDate)
+    return @(0..4 | ForEach-Object { $WeekStartDate.AddDays($_) })
+}
+
+function global:Format-TodoDate {
+    param($DateString)
+    if ([string]::IsNullOrEmpty($DateString)) { return "" }
+    try {
+        $date = [datetime]::Parse($DateString); $today = [datetime]::Today; $diffDays = ($date.Date - $today).Days
+        $dateStr = $date.ToString("MMM dd")
+        if ($diffDays -eq 0) { return "Today" } elseif ($diffDays -eq 1) { return "Tomorrow" } elseif ($diffDays -eq -1) { return "Yesterday" }
+        elseif ($diffDays -gt 1 -and $diffDays -le 7) { return "$dateStr (in $diffDays days)" } elseif ($diffDays -lt -1) { return "$dateStr ($([Math]::Abs($diffDays)) days ago)" }
+        else { return $dateStr }
+    } catch { return $DateString }
+}
+
+function global:Get-NextWeekday {
+    param([int]$TargetDayOfWeek)
+    $today = [datetime]::Today; $currentDayOfWeek = [int]$today.DayOfWeek
+    $daysToAdd = ($TargetDayOfWeek - $currentDayOfWeek + 7) % 7
+    if ($daysToAdd -eq 0) { $daysToAdd = 7 }
+    return $today.AddDays($daysToAdd)
+}
+
+#endregion
+
+#region Validation Functions
+
+function global:Test-ExcelConnection {
+    Write-Header "Test Excel Connection"; $excel = $null
+    try {
+        Write-Info "Testing Excel COM object creation..."; $excel = New-Object -ComObject Excel.Application
+        Write-Success "Excel COM object created successfully!"; Write-Info "Excel version: $($excel.Version)"; $excel.Quit()
+    } catch { Write-Error "Excel connection test failed: $_"; Write-Warning "Make sure Microsoft Excel is installed." }
+    finally { if ($excel) { try { [System.Runtime.InteropServices.Marshal]::ReleaseComObject($excel) | Out-Null } catch {}; Remove-Variable excel -ErrorAction SilentlyContinue }; [GC]::Collect(); [GC]::WaitForPendingFinalizers() }
+}
+
+#endregion
+
+#region Import/Export Functions
+
+function global:Export-AllData {
+    Write-Header "Export All Data"
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $exportPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "ProductivitySuite_Export_$timestamp"
+    New-Item -ItemType Directory -Path $exportPath -Force | Out-Null
+    $script:Data | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $exportPath "unified_data.json") -Encoding UTF8
+    if ($script:Data.TimeEntries -and $script:Data.TimeEntries.Count -gt 0) { $timeExport = $script:Data.TimeEntries | ForEach-Object { $project = Get-ProjectOrTemplate $_.ProjectKey; [PSCustomObject]@{ Date = $_.Date; ProjectKey = $_.ProjectKey; ProjectName = if ($project) { $project.Name } else { "N/A" }; Hours = $_.Hours; Description = $_.Description; TaskId = $_.TaskId; StartTime = $_.StartTime; EndTime = $_.EndTime } }; $timeExport | Export-Csv (Join-Path $exportPath "time_entries.csv") -NoTypeInformation -Encoding UTF8 }
+    if ($script:Data.Tasks -and $script:Data.Tasks.Count -gt 0) { $taskExport = $script:Data.Tasks | ForEach-Object { $project = if ($_.ProjectKey) { Get-ProjectOrTemplate $_.ProjectKey } else { $null }; [PSCustomObject]@{ Id = $_.Id; Description = $_.Description; Priority = $_.Priority; Category = $_.Category; ProjectName = if ($project) { $project.Name } else { "" }; Status = Get-TaskStatus $_; DueDate = $_.DueDate; Progress = $_.Progress; TimeSpent = $_.TimeSpent; EstimatedTime = $_.EstimatedTime; Tags = if ($_.Tags) { $_.Tags -join "," } else { "" } } }; $taskExport | Export-Csv (Join-Path $exportPath "tasks.csv") -NoTypeInformation -Encoding UTF8 }
+    if ($script:Data.Projects -and $script:Data.Projects.Count -gt 0) { $projectExport = $script:Data.Projects.GetEnumerator() | ForEach-Object { $projValue = $_.Value; [PSCustomObject]@{ Key = $_.Key; Name = $projValue.Name; Id1 = $projValue.Id1; Id2 = $projValue.Id2; Client = $projValue.Client; Department = $projValue.Department; Status = $projValue.Status; BillingType = $projValue.BillingType; Rate = $projValue.Rate; Budget = $projValue.Budget; TotalHours = $projValue.TotalHours; ActiveTasks = $projValue.ActiveTasks; CompletedTasks = $projValue.CompletedTasks } }; $projectExport | Export-Csv (Join-Path $exportPath "projects.csv") -NoTypeInformation -Encoding UTF8 }
+    $commands = $script:Data.Tasks | Where-Object { $_.IsCommand -eq $true }; if ($commands.Count -gt 0) { $commandExport = $commands | ForEach-Object { [PSCustomObject]@{ Id = $_.Id; Name = $_.Description; Command = $_.Notes; Category = $_.Category; Tags = if ($_.Tags) { $_.Tags -join "," } else { "" }; Hotkey = if ($_.Hotkey) { $_.Hotkey } else { "" }; CreatedDate = $_.CreatedDate } }; $commandExport | Export-Csv (Join-Path $exportPath "command_snippets.csv") -NoTypeInformation -Encoding UTF8 }
+    Write-Success "Data exported to: $exportPath"; try { Start-Process $exportPath } catch { Write-Warning "Could not open export folder: $_" }
+}
+
+function global:Import-Data {
+    Write-Header "Import Data"
+    Write-Warning "This will merge imported data or allow full replacement."
+    Write-Host "You can enter a path, or use the file browser."
+    $importFilePath = Start-TerminalFileBrowser -SelectFileMode
+    if (-not $importFilePath -or -not (Test-Path $importFilePath -PathType Leaf)) { Write-Error "File not found or selection cancelled!"; return }
+    try {
+        Backup-Data -Silent; $jsonContent = Get-Content $importFilePath -Raw; $importedData = ConvertFrom-JsonToHashtable $jsonContent
+        Write-Host "`nImport options: [1] Merge [2] Replace [3] Cancel"; $choice = Read-Host "Choice"
+        switch ($choice) {
+            "1" { if ($importedData.Projects) { foreach ($key in $importedData.Projects.Keys) { if (-not $script:Data.Projects.ContainsKey($key)) { $script:Data.Projects[$key] = $importedData.Projects[$key]; Write-Success "Imported project: $key" } else { Write-Warning "Skipped existing project: $key" } } }; if ($importedData.Tasks) { $existingTaskIds = $script:Data.Tasks | ForEach-Object { $_.Id }; $importedTaskCount = 0; foreach ($task in $importedData.Tasks) { if ($task.Id -notin $existingTaskIds) { $script:Data.Tasks += $task; $importedTaskCount++ } }; Write-Success "Imported $importedTaskCount new tasks" }; if ($importedData.TimeEntries) { if ($null -eq $script:Data.TimeEntries) { $script:Data.TimeEntries = @() }; $existingTimeEntryIds = $script:Data.TimeEntries | ForEach-Object { $_.Id }; $importedTimeEntryCount = 0; foreach ($entry in $importedData.TimeEntries) { if ($null -eq $entry.Id -or $entry.Id -notin $existingTimeEntryIds) { if ($null -eq $entry.Id) { $entry.Id = New-TodoId }; $script:Data.TimeEntries += $entry; $importedTimeEntryCount++ } }; Write-Success "Imported $importedTimeEntryCount new time entries" }; if ($importedData.Settings -is [hashtable]) { Write-Info "Merging settings..."; $defaultSettings = Get-DefaultSettings; foreach ($settingKey in $defaultSettings.Keys) { if ($importedData.Settings.ContainsKey($settingKey)) { if ($script:Data.Settings[$settingKey] -is [hashtable] -and $importedData.Settings[$settingKey] -is [hashtable]) { foreach ($subKey in $importedData.Settings[$settingKey].Keys) { if ($script:Data.Settings[$settingKey].ContainsKey($subKey)) { $script:Data.Settings[$settingKey][$subKey] = $importedData.Settings[$settingKey][$subKey] } } } else { $script:Data.Settings[$settingKey] = $importedData.Settings[$settingKey] } } } } else { Write-Warning "No valid settings in import file." }; Save-UnifiedData; Initialize-ThemeSystem; Write-Success "Data merge complete!" }
+            "2" { Write-Warning "This will REPLACE ALL data. Type 'yes' to confirm"; if ((Read-Host) -eq 'yes') { $script:Data = $importedData; if ($script:Data.CurrentWeek -is [string]) { try { $script:Data.CurrentWeek = [DateTime]::Parse($script:Data.CurrentWeek) } catch { $script:Data.CurrentWeek = Get-WeekStart (Get-Date) } } elseif ($null -eq $script:Data.CurrentWeek) { $script:Data.CurrentWeek = Get-WeekStart (Get-Date) }; $defaultSettings = Get-DefaultSettings; if (-not $script:Data.Settings -or -not ($script:Data.Settings -is [hashtable])) { $script:Data.Settings = $defaultSettings } else { foreach($key in $defaultSettings.Keys){ if(-not $script:Data.Settings.ContainsKey($key)){ $script:Data.Settings[$key] = $defaultSettings[$key] } elseif ($defaultSettings[$key] -is [hashtable] -and $script:Data.Settings[$key] -is [hashtable]) { foreach($subKey in $defaultSettings[$key].Keys){ if(-not $script:Data.Settings[$key].ContainsKey($subKey)){ $script:Data.Settings[$key][$subKey] = $defaultSettings[$key][$subKey] } } } } }; Save-UnifiedData; Initialize-ThemeSystem; Write-Success "Data replaced successfully!" } else { Write-Info "Replacement cancelled."} }
+            "3" { Write-Info "Import cancelled" }
+            default { Write-Warning "Invalid choice. Import cancelled." }
+        }
+    } catch { Write-Error "Import failed: $_" }
+}
+
+#endregion
+
+#region Reset Functions
+
+function global:Reset-ToDefaults {
+    Write-Header "Reset to Defaults"
+    Write-Warning "This will reset all settings to defaults. Your data will be preserved."
+    if ((Read-Host "Type 'yes' to confirm:") -eq 'yes') {
+        Backup-Data -Silent; $script:Data.Settings = Get-DefaultSettings
+        Save-UnifiedData; Initialize-ThemeSystem
+        Write-Success "Settings reset to defaults!"; Write-Info "Your projects, tasks, and time entries remain untouched."
+    } else { Write-Info "Reset cancelled."}
+}
+
+#endregion
+
+#region Clipboard Functions
+
+function global:Copy-ToClipboard {
+    param([string]$TextToCopy)
+    try { $TextToCopy | Set-Clipboard; return $true } catch { Write-Warning "Could not copy to clipboard: $_"; return $false }
+}
+
+function global:Get-FromClipboard {
+    try { return Get-Clipboard } catch { Write-Warning "Could not read from clipboard: $_"; return $null }
+}
+
+#endregion
+
+#region File/Directory Helpers (NEW)
+
+function global:Format-FileSize {
+    param([long]$Size)
+    if ($Size -eq 0) { return "0 B" }
+    $units = @("B", "KB", "MB", "GB", "TB"); $index = 0; $value = $Size
+    while ($value -ge 1024 -and $index -lt $units.Count - 1) { $value = $value / 1024; $index++ }
+    return "{0:N2} {1}" -f $value, $units[$index]
+}
+
+function global:Get-FileIcon {
+    param([string]$Extension)
+    $icons = @{ '.txt' = '📄'; '.doc' = '📝'; '.docx' = '📝'; '.xls' = '📊'; '.xlsx' = '📊'; '.xlsm' = '📊'; '.ppt' = '📊'; '.pptx' = '📊'; '.pdf' = '📕'; '.zip' = '🗜️'; '.rar' = '🗜️'; '.7z' = '🗜️'; '.ps1' = '⚡'; '.psm1' = '⚡'; '.psd1' = '⚡'; '.bat' = '⚙️'; '.cmd' = '⚙️'; '.exe' = '⚙️'; '.msi' = '📦'; '.jpg' = '🖼️'; '.jpeg' = '🖼️'; '.png' = '🖼️'; '.gif' = '🖼️'; '.bmp' = '🖼️'; '.mp3' = '🎵'; '.wav' = '🎵'; '.mp4' = '🎬'; '.avi' = '🎬'; '.mkv' = '🎬'; '.html' = '🌐'; '.xml' = '📋'; '.json' = '📋'; '.csv' = '📋'; '.log' = '📋'; '.ini' = '⚙️'; '.config' = '⚙️' }
+    $icon = $icons[$Extension.ToLower()]
+    if ($icon) { return $icon } else { return '📄' }
+}
+
+#endregion

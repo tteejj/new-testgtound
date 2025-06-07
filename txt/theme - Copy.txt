@@ -1,0 +1,263 @@
+# Simple Theme System - Console Colors Only
+
+ 
+
+function global:Initialize-ThemeSystem {
+
+    # Do nothing - using simple console colors only
+
+}
+
+ 
+
+function global:Get-ThemeProperty {
+
+    param([string]$Path)
+
+   
+
+    # Return simple console colors only
+
+    switch ($Path) {
+
+        "Palette.HeaderFG" { return "Cyan" }
+
+        "Palette.SuccessFG" { return "Green" }
+
+        "Palette.ErrorFG" { return "Red" }
+
+        "Palette.WarningFG" { return "Yellow" }
+
+        "Palette.InfoFG" { return "Blue" }
+
+        "Palette.AccentFG" { return "Magenta" }
+
+        "Palette.SubtleFG" { return "DarkGray" }
+
+        "Palette.PrimaryFG" { return "White" }
+
+        "Palette.SecondaryFG" { return "Gray" }
+
+        "DataTable.Header.FG" { return "Cyan" }
+
+        "DataTable.DataRow.FG" { return "White" }
+
+        "DataTable.AltRow.FG" { return "Gray" }
+
+        "DataTable.DataRow.BG" { return $null }
+
+        "DataTable.AltRow.BG" { return $null }
+
+        default { return "White" }
+
+    }
+
+}
+
+ 
+
+function global:Get-BorderStyleChars {
+
+    param([string]$Style = "Single")
+
+   
+
+    $borderStyles = @{
+
+        Single = @{
+
+            TopLeft = "┌"; TopRight = "┐"; BottomLeft = "└"; BottomRight = "┘"
+
+            Horizontal = "─"; Vertical = "│"; Cross = "┼"; TLeft = "├"; TRight = "┤"
+
+            TTop = "┬"; TBottom = "┴"
+
+        }
+
+        Double = @{
+
+            TopLeft = "╔"; TopRight = "╗"; BottomLeft = "╚"; BottomRight = "╝"
+
+            Horizontal = "═"; Vertical = "║"; Cross = "╬"; TLeft = "╠"; TRight = "╣"
+
+            TTop = "╦"; TBottom = "╩"
+
+        }
+
+    }
+
+   
+
+    if ($borderStyles.ContainsKey($Style)) {
+
+        return $borderStyles[$Style]
+
+    }
+
+    return $borderStyles.Single
+
+}
+
+ 
+
+function global:Apply-PSStyle {
+
+    param(
+
+        [string]$Text,
+
+        [string]$FG,
+
+        [string]$BG,
+
+        [switch]$Bold,
+
+        [switch]$Italic,
+
+        [switch]$Underline
+
+    )
+
+   
+
+    # Just return plain text - no styling
+
+    return $Text
+
+}
+
+ 
+
+function global:Write-Header {
+
+    param([string]$Text)
+
+   
+
+    if ($script:Data -and $script:Data.Settings -and $script:Data.Settings.Theme -and $script:Data.Settings.Theme.Header) {
+
+        Write-Host "`n$Text" -ForegroundColor $script:Data.Settings.Theme.Header
+
+    } else {
+
+        Write-Host "`n$Text" -ForegroundColor Cyan
+
+    }
+
+    Write-Host ("=" * $Text.Length) -ForegroundColor DarkCyan
+
+}
+
+ 
+
+function global:Write-Success {
+
+    param([string]$Text)
+
+   
+
+    if ($script:Data -and $script:Data.Settings -and $script:Data.Settings.Theme -and $script:Data.Settings.Theme.Success) {
+
+        Write-Host "✓ $Text" -ForegroundColor $script:Data.Settings.Theme.Success
+
+    } else {
+
+        Write-Host "✓ $Text" -ForegroundColor Green
+
+    }
+
+}
+
+ 
+
+function global:Write-Warning {
+
+    param([string]$Text)
+
+   
+
+    if ($script:Data -and $script:Data.Settings -and $script:Data.Settings.Theme -and $script:Data.Settings.Theme.Warning) {
+
+        Write-Host "⚠ $Text" -ForegroundColor $script:Data.Settings.Theme.Warning
+
+    } else {
+
+        Write-Host "⚠ $Text" -ForegroundColor Yellow
+
+    }
+
+}
+
+ 
+
+function global:Write-Error {
+
+    param([string]$Text)
+
+   
+
+    if ($script:Data -and $script:Data.Settings -and $script:Data.Settings.Theme -and $script:Data.Settings.Theme.Error) {
+
+        Write-Host "✗ $Text" -ForegroundColor $script:Data.Settings.Theme.Error
+
+    } else {
+
+        Write-Host "✗ $Text" -ForegroundColor Red
+
+    }
+
+}
+
+ 
+
+function global:Write-Info {
+
+    param([string]$Text)
+
+   
+
+    if ($script:Data -and $script:Data.Settings -and $script:Data.Settings.Theme -and $script:Data.Settings.Theme.Info) {
+
+        Write-Host "ℹ $Text" -ForegroundColor $script:Data.Settings.Theme.Info
+
+    } else {
+
+        Write-Host "ℹ $Text" -ForegroundColor Blue
+
+    }
+
+}
+
+ 
+
+function global:Edit-ThemeSettings {
+
+    Write-Header "Theme Settings"
+
+   
+
+    if (-not $script:Data.Settings.Theme) {
+
+        $script:Data.Settings.Theme = @{
+
+            Header = "Cyan"; Success = "Green"; Warning = "Yellow"
+
+            Error = "Red"; Info = "Blue"; Accent = "Magenta"; Subtle = "DarkGray"
+
+        }
+
+    }
+
+ 
+
+    Write-Host "Current theme colors:" -ForegroundColor Yellow
+
+    Write-Host "Available colors: Black, DarkBlue, DarkGreen, DarkCyan, DarkRed, DarkMagenta, DarkYellow, Gray, DarkGray, Blue, Green, Cyan, Red, Magenta, Yellow, White"
+
+   
+
+    Save-UnifiedData
+
+    Write-Success "Theme settings updated!"
+
+}
