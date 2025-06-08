@@ -1,0 +1,84 @@
+# theme.ps1 - TUI Theme Engine
+# Manages ANSI colors, themes, palettes, and resolution.
+
+# --- ANSI Escape Code ---
+$global:esc = [char]27
+$global:ansiReset = "${esc}[0m"
+$global:ansiFgReset = "${esc}[39m"
+$global:ansiBgReset = "${esc}[49m"
+
+# --- Theme Definitions ---
+$script:FallbackRgbTheme = @{ Name = "Fallback RGB"; Description = "Basic theme using RGB ANSI codes."; Palette = @{ DefaultFG = '39'; DefaultBG = '49'; PrimaryFG = '38;2;220;220;220'; PrimaryBG = '49'; SecondaryFG = '38;2;128;128;128'; HighlightFG = '38;2;255;255;255'; HighlightBG = '48;2;0;0;139'; ErrorFG = '38;2;255;60;60'; ErrorBG = '49'; WarningFG = '38;2;255;255;80'; WarningBG = '49'; SuccessFG = '38;2;60;255;60'; SuccessBG = '49'; InfoFG = '38;2;60;255;255'; InfoBG = '49'; DataFG = '$Palette:PrimaryFG'; DisabledFG = '$Palette:SecondaryFG'; BorderFG = '$Palette:SecondaryFG'; InputPrompt = '$Palette:InfoFG'; InputText = '$Palette:PrimaryFG'; InputDefaultHint = '$Palette:SecondaryFG'; InputBackground = '$Palette:PrimaryBG'; FocusBorderFG = '$Palette:HighlightFG'; FocusBorderBG = '$Palette:PrimaryBG'; FocusTextFG = '$Palette:HighlightFG'; FocusTextBG = '$Palette:HighlightBG'; WidgetFG = '$Palette:PrimaryFG'; WidgetBG = '$Palette:PrimaryBG'; WidgetFocusFG = '$Palette:HighlightFG'; WidgetFocusBG = '$Palette:HighlightBG'; WidgetDisabledFG = '$Palette:DisabledFG'; }; ScreenBorder = @{ Enabled = $true; Style = "Single"; FG = '$Palette:BorderFG'; BG = '$Palette:PrimaryBG' }; WindowTitle = @{ FG = '$Palette:HighlightFG'; BG = '$Palette:HighlightBG'; Pad = 1; LinesAbove = 0; LinesBelow = 0; Border = $null }; ActionListLine = @{ FG = '$Palette:InfoFG'; BG = '$Palette:PrimaryBG' }; StatusLine = @{ FG = '$Palette:SecondaryFG'; BG = '$Palette:PrimaryBG' }; StatusMessage = @{ Types = @{ Success = @{ FG = '$Palette:SuccessFG'; BG = '$Palette:SuccessBG'; Prefix = "[OK] " }; Error = @{ FG = '$Palette:ErrorFG'; BG = '$Palette:ErrorBG'; Prefix = "[ERROR] " }; Warning = @{ FG = '$Palette:WarningFG'; BG = '$Palette:WarningBG'; Prefix = "[WARN] " }; Info = @{ FG = '$Palette:InfoFG'; BG = '$Palette:InfoBG'; Prefix = "[INFO] " } } }; InputControl = @{ Prompt = @{ FG = '$Palette:InputPrompt' }; DefaultHint = @{ FG = '$Palette:InputDefaultHint'; Prefix = " ("; Suffix = ")" }; UserInput = @{ FG = '$Palette:InputText'; BG = '$Palette:InputBackground' } }; DataTable = @{ BorderStyle = "Single"; BorderFG = '$Palette:BorderFG'; Pad = 1; Header = @{ FG = '$Palette:HighlightFG'; BG = '$Palette:HighlightBG'; Separator = $true }; DataRow = @{ FG = '$Palette:DataFG'; BG = '$Palette:PrimaryBG' }; AltRow = @{ FG = '$Palette:DataFG'; BG = '$Palette:PrimaryBG' }; Highlight = @{ Selected = @{ FG = '$Palette:HighlightFG'; BG = '$Palette:HighlightBG' }; Overdue = @{ FG = '$Palette:ErrorFG'; BG = '$Palette:PrimaryBG' }; DueSoon = @{ FG = '$Palette:WarningFG'; BG = '$Palette:PrimaryBG' }; Completed = @{ FG = '$Palette:DisabledFG'; BG = '$Palette:PrimaryBG' }; SchedCurrent = @{ FG = '$Palette:SuccessFG'; BG = '$Palette:PrimaryBG' }; SchedNext = @{ FG = '$Palette:WarningFG'; BG = '$Palette:PrimaryBG' } } }; Menu = @{ Header = @{ FG = '$Palette:HighlightFG'; BG = '$Palette:HighlightBG' }; Option = @{ FG = '$Palette:PrimaryFG'; BG = '$Palette:PrimaryBG' }; Info = @{ FG = '$Palette:InfoFG'; BG = '$Palette:PrimaryBG' } }; HelpOverlay = @{ FG = '38;2;0;0;0'; BG = '48;2;255;255;255' }; SegmentDisplay = @{ FG = '$Palette:SuccessFG'; BG = '$Palette:PrimaryBG' } }
+$script:SynthwaveRgbTheme = @{ Name = "Synthwave RGB"; Description = "Raw ANSI codes for Synthwave colors using RGB"; Palette = @{ DefaultFG = '39'; DefaultBG = '49'; PrimaryFG = '38;2;240;240;240'; PrimaryBG = '48;2;46;26;71'; SecondaryFG = '38;2;160;160;160'; HighlightFG = '38;2;255;255;255'; HighlightBG = '48;2;255;0;127'; ErrorFG = '38;2;255;65;54'; ErrorBG = '$Palette:PrimaryBG'; WarningFG = '38;2;255;215;0'; WarningBG = '$Palette:PrimaryBG'; SuccessFG = '38;2;57;204;204'; SuccessBG = '$Palette:PrimaryBG'; InfoFG = '38;2;127;219;255'; InfoBG = '$Palette:PrimaryBG'; DataFG = '$Palette:PrimaryFG'; DisabledFG = '38;2;136;136;136'; BorderFG = '38;2;255;0;127'; InputPrompt = '$Palette:SuccessFG'; InputText = '$Palette:PrimaryFG'; InputDefaultHint = '$Palette:SecondaryFG'; InputBackground = '48;2;61;42;87'; FocusBorderFG = '$Palette:WarningFG'; FocusBorderBG = '$Palette:PrimaryBG'; FocusTextFG = '38;2;0;0;0'; FocusTextBG = '$Palette:WarningFG'; WidgetFG = '$Palette:InfoFG'; WidgetBG = '$Palette:InputBackground'; WidgetFocusFG = '$Palette:HighlightFG'; WidgetFocusBG = '$Palette:HighlightBG'; WidgetDisabledFG = '$Palette:DisabledFG'; }; ScreenBorder = @{ Enabled = $true; Style = "Double"; FG = '$Palette:BorderFG'; BG = '$Palette:PrimaryBG' }; WindowTitle = @{ FG = '$Palette:HighlightFG'; BG = '$Palette:HighlightBG'; Pad = 1; LinesAbove = 0; LinesBelow = 0; Border = $null }; ActionListLine = @{ FG = '$Palette:InfoFG'; BG = '$Palette:PrimaryBG' }; StatusLine = @{ FG = '$Palette:SecondaryFG'; BG = '$Palette:PrimaryBG' }; StatusMessage = @{ Types = @{ Success = @{ FG = '$Palette:SuccessFG'; BG = '$Palette:SuccessBG'; Prefix = "[OK] " }; Error = @{ FG = '$Palette:ErrorFG'; BG = '$Palette:ErrorBG'; Prefix = "[ERROR] " }; Warning = @{ FG = '$Palette:WarningFG'; BG = '$Palette:WarningBG'; Prefix = "[WARN] " }; Info = @{ FG = '$Palette:InfoFG'; BG = '$Palette:InfoBG'; Prefix = "[INFO] " } } }; InputControl = @{ Prompt = @{ FG = '$Palette:InputPrompt' }; DefaultHint = @{ FG = '$Palette:InputDefaultHint'; Prefix = " ("; Suffix = ")" }; UserInput = @{ FG = '$Palette:InputText'; BG = '$Palette:InputBackground' } }; DataTable = @{ BorderStyle = "Double"; BorderFG = '$Palette:BorderFG'; Pad = 1; Header = @{ FG = '$Palette:HighlightFG'; BG = '$Palette:HighlightBG'; Separator = $true }; DataRow = @{ FG = '$Palette:DataFG'; BG = '$Palette:PrimaryBG' }; AltRow = @{ FG = '$Palette:DataFG'; BG = '48;2;61;42;87' }; Highlight = @{ Selected = @{ FG = '38;2;0;0;0'; BG = '48;2;255;215;0' }; Overdue = @{ FG = '$Palette:ErrorFG'; BG = '$Palette:PrimaryBG' }; DueSoon = @{ FG = '$Palette:WarningFG'; BG = '$Palette:PrimaryBG' }; Completed = @{ FG = '$Palette:DisabledFG'; BG = '$Palette:PrimaryBG' }; SchedCurrent = @{ FG = '$Palette:SuccessFG'; BG = '$Palette:PrimaryBG' }; SchedNext = @{ FG = '$Palette:WarningFG'; BG = '$Palette:PrimaryBG' } } }; Menu = @{ Header = @{ FG = '$Palette:HighlightFG'; BG = '$Palette:HighlightBG' }; Option = @{ FG = '$Palette:PrimaryFG'; BG = '$Palette:PrimaryBG' }; Info = @{ FG = '$Palette:InfoFG'; BG = '$Palette:PrimaryBG' } }; HelpOverlay = @{ FG = '38;2;0;0;0'; BG = '48;2;255;255;255' }; SegmentDisplay = @{ FG = '$Palette:SuccessFG'; BG = '$Palette:PrimaryBG' } }
+$script:RetroCrtGreenTheme = @{ Name = "Retro CRT Green"; Description = "Monochrome green on black CRT style."; Palette = @{ DefaultFG = '39'; DefaultBG = '49'; PrimaryFG = '38;2;60;255;60'; PrimaryBG = '48;2;10;20;10'; SecondaryFG = '38;2;40;180;40'; HighlightFG = '38;2;180;255;180'; HighlightBG = '48;2;40;180;40'; ErrorFG = '$Palette:HighlightFG'; ErrorBG = '$Palette:PrimaryBG'; WarningFG = '$Palette:HighlightFG'; WarningBG = '$Palette:PrimaryBG'; SuccessFG = '$Palette:PrimaryFG'; SuccessBG = '$Palette:PrimaryBG'; InfoFG = '$Palette:PrimaryFG'; InfoBG = '$Palette:PrimaryBG'; DataFG = '$Palette:PrimaryFG'; DisabledFG = '38;2;30;100;30'; BorderFG = '$Palette:SecondaryFG'; InputPrompt = '$Palette:HighlightFG'; InputText = '$Palette:HighlightFG'; InputDefaultHint = '$Palette:SecondaryFG'; InputBackground = '48;2;20;40;20'; FocusBorderFG = '$Palette:HighlightFG'; FocusBorderBG = '$Palette:PrimaryBG'; FocusTextFG = '$Palette:PrimaryBG'; FocusTextBG = '$Palette:HighlightFG'; WidgetFG = '$Palette:PrimaryFG'; WidgetBG = '$Palette:InputBackground'; WidgetFocusFG = '$Palette:PrimaryBG'; WidgetFocusBG = '$Palette:HighlightFG'; WidgetDisabledFG = '$Palette:DisabledFG'; }; ScreenBorder = @{ Enabled = $true; Style = "ASCII"; FG = '$Palette:BorderFG'; BG = '$Palette:PrimaryBG' }; WindowTitle = @{ FG = '$Palette:HighlightFG'; BG = '$Palette:SecondaryFG'; Pad = 1; LinesAbove = 0; LinesBelow = 0; Border = $null }; ActionListLine = @{ FG = '$Palette:SecondaryFG'; BG = '$Palette:PrimaryBG' }; StatusLine = @{ FG = '$Palette:SecondaryFG'; BG = '$Palette:PrimaryBG' }; StatusMessage = @{ Types = @{ Success = @{ FG = '$Palette:SuccessFG'; BG = '$Palette:SuccessBG'; Prefix = "[OK] " }; Error = @{ FG = '$Palette:ErrorFG'; BG = '$Palette:ErrorBG'; Prefix = "[ERROR] " }; Warning = @{ FG = '$Palette:WarningFG'; BG = '$Palette:WarningBG'; Prefix = "[WARN] " }; Info = @{ FG = '$Palette:InfoFG'; BG = '$Palette:InfoBG'; Prefix = "[INFO] " } } }; InputControl = @{ Prompt = @{ FG = '$Palette:InputPrompt' }; DefaultHint = @{ FG = '$Palette:InputDefaultHint'; Prefix = " ("; Suffix = ")" }; UserInput = @{ FG = '$Palette:InputText'; BG = '$Palette:InputBackground' } }; DataTable = @{ BorderStyle = "ASCII"; BorderFG = '$Palette:BorderFG'; Pad = 1; Header = @{ FG = '$Palette:HighlightFG'; BG = '$Palette:SecondaryFG'; Separator = $true }; DataRow = @{ FG = '$Palette:DataFG'; BG = '$Palette:PrimaryBG' }; AltRow = @{ FG = '$Palette:DataFG'; BG = '$Palette:PrimaryBG' }; Highlight = @{ Selected = @{ FG = '$Palette:PrimaryBG'; BG = '$Palette:HighlightFG' }; Overdue = @{ FG = '$Palette:HighlightFG'; BG = '$Palette:PrimaryBG' }; DueSoon = @{ FG = '$Palette:HighlightFG'; BG = '$Palette:PrimaryBG' }; Completed = @{ FG = '$Palette:DisabledFG'; BG = '$Palette:PrimaryBG' }; SchedCurrent = @{ FG = '$Palette:PrimaryFG'; BG = '$Palette:PrimaryBG' }; SchedNext = @{ FG = '$Palette:SecondaryFG'; BG = '$Palette:PrimaryBG' } } }; Menu = @{ Header = @{ FG = '$Palette:HighlightFG'; BG = '$Palette:SecondaryFG' }; Option = @{ FG = '$Palette:PrimaryFG'; BG = '$Palette:PrimaryBG' }; Info = @{ FG = '$Palette:SecondaryFG'; BG = '$Palette:PrimaryBG' } }; HelpOverlay = @{ FG = '$Palette:PrimaryBG'; BG = '$Palette:HighlightFG' }; SegmentDisplay = @{ FG = '$Palette:PrimaryFG'; BG = '$Palette:PrimaryBG' } }
+
+$script:LoadedThemes = @{
+    "FallbackRgb" = $script:FallbackRgbTheme
+    "SynthwaveRgb" = $script:SynthwaveRgbTheme
+    "RetroCrtGreen" = $script:RetroCrtGreenTheme
+}
+
+function global:Initialize-ThemeSystem {
+    $configuredThemeName = $Global:AppConfig.defaultTheme
+    if (-not (Set-ActiveTheme -ThemeName $configuredThemeName)) {
+        Write-AppLog "Failed to set configured theme '$configuredThemeName', fallback applied." "WARN"
+        $Global:AppConfig.defaultTheme = $script:ActiveThemeName
+    }
+    Write-AppLog "Theme System Initialized. Active Theme: '$($script:ActiveThemeName)'" "INFO"
+}
+
+function global:Set-ActiveTheme {
+    param([string]$ThemeName)
+    if ($script:LoadedThemes.ContainsKey($ThemeName)) {
+        $script:ActiveTheme = $script:LoadedThemes[$ThemeName]
+        $script:ActiveThemeName = $ThemeName
+        return $true
+    } else {
+        Write-AppLog "Theme '$ThemeName' not found. Falling back to 'FallbackRgb'." "ERROR"
+        return (Set-ActiveTheme -ThemeName "FallbackRgb")
+    }
+}
+
+function global:Get-ActiveTheme {
+    if ($null -eq $script:ActiveTheme) {
+        Initialize-ThemeSystem
+    }
+    return $script:ActiveTheme
+}
+
+function global:Get-LoadedThemeNames {
+    return $script:LoadedThemes.Keys | Sort-Object
+}
+
+function global:Get-PmcThemeAnsiCode {
+    param([string]$PropertyPath, [string]$DefaultAnsiCode = '39')
+    $theme = Get-ActiveTheme
+    if ($null -eq $theme) { return $DefaultAnsiCode }
+    $currentValue = $theme
+    $pathSegments = $PropertyPath.Split('.')
+    try {
+        foreach($segment in $pathSegments) {
+            if ($currentValue -is [hashtable] -and $currentValue.ContainsKey($segment)) {
+                $currentValue = $currentValue[$segment]
+            } else {
+                return $DefaultAnsiCode
+            }
+        }
+    } catch { return $DefaultAnsiCode }
+
+    $recursionGuard = 0
+    while ($currentValue -is [string] -and $currentValue.StartsWith('$Palette:') -and $recursionGuard -lt 5) {
+        $recursionGuard++
+        $paletteKey = $currentValue.Substring(9)
+        if ($theme.Palette.ContainsKey($paletteKey)) {
+            $currentValue = $theme.Palette[$paletteKey]
+        } else {
+            return $DefaultAnsiCode
+        }
+    }
+    
+    if ($currentValue -is [string] -and $currentValue -match '^(3[0-79]|9[0-7]|10[0-7]|38;2;\d{1,3};\d{1,3};\d{1,3}|4[0-79]|10[0-7]|48;2;\d{1,3};\d{1,3};\d{1,3})$') {
+        return $currentValue
+    }
+    return $DefaultAnsiCode
+}

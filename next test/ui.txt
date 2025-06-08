@@ -1,0 +1,184 @@
+# ui.ps1 - TUI Rendering Engine
+# Manages the screen buffer, drawing primitives, and view renderers.
+
+#region Buffer Management
+function global:New-ConsoleCell {
+    param( [char]$Character = ' ', [string]$FG_Ansi = '39', [string]$BG_Ansi = '49' )
+    return @{ Char = $Character; FG_Ansi = $FG_Ansi; BG_Ansi = $BG_Ansi }
+}
+
+function global:New-ConsoleBufferInternal {
+    param([int]$Width, [int]$Height)
+    Write-AppLog "Creating new buffer array: ${Width}x${Height}" "TRACE"
+    $grid = @()
+    for ($y = 0; $y -lt $Height; $y++) {
+        $row = @()
+        for ($x = 0; $x -lt $Width; $x++) { $row += New-ConsoleCell }
+        $grid += ,$row
+    }
+    return $grid
+}
+
+function global:Initialize-ConsoleBuffers {
+    param([int]$Width, [int]$Height)
+    Write-AppLog "Initializing console buffers: ${Width}x${Height}" "DEBUG"
+    $script:FrontBuffer = New-ConsoleBufferInternal -Width $Width -Height $Height
+    $script:BackBuffer = New-ConsoleBufferInternal -Width $Width -Height $Height
+    $script:BufferWidth = $Width
+    $script:BufferHeight = $Height
+}
+
+function global:Clear-BackBuffer {
+    if ($null -eq $script:BackBuffer) { Write-Warning "Back buffer is not initialized."; return }
+    $defaultCell = New-ConsoleCell
+    $defaultCell.FG_Ansi = Get-PmcThemeAnsiCode "Palette.PrimaryFG" '39'
+    $defaultCell.BG_Ansi = Get-PmcThemeAnsiCode "Palette.PrimaryBG" '49'
+    for ($y = 0; $y -lt $script:BufferHeight; $y++) {
+        for ($x = 0; $x -lt $script:BufferWidth; $x++) {
+            $script:BackBuffer[$y][$x] = $defaultCell.Clone()
+        }
+    }
+}
+
+function global:Write-CellToBuffer {
+    param( [int]$X, [int]$Y, [hashtable]$Cell, [hashtable]$ClippingView = $null )
+    if ($Y -lt 0 -or $Y -ge $script:BufferHeight -or $X -lt 0 -or $X -ge $script:BufferWidth) { return }
+    if ($ClippingView) {
+        if ($X -lt $ClippingView.X -or $X -ge ($ClippingView.X + $ClippingView.Width) -or $Y -lt $ClippingView.Y -or $Y -ge ($ClippingView.Y + $ClippingView.Height)) {
+            return
+        }
+    }
+    $targetCell = @{ Char = $Cell.Char ?? ' '; FG_Ansi = $Cell.FG_Ansi ?? "39"; BG_Ansi = $Cell.BG_Ansi ?? "49" }
+    $script:BackBuffer[$Y][$X] = $targetCell
+}
+
+function global:Write-StringToBuffer {
+    param( [int]$TargetX, [int]$TargetY, [string]$Text, [string]$FG_Ansi = "39", [string]$BG_Ansi = "49", [hashtable]$ClippingView = $null )
+    if ($TargetY -lt 0 -or $TargetY -ge $script:BufferHeight) { return }
+    $currentX = $TargetX
+    foreach ($char in $Text.ToCharArray()) {
+        if ($currentX -ge $script:BufferWidth) { break }
+        if ($currentX -ge 0) {
+            $cell = @{ Char = $char; FG_Ansi = $FG_Ansi; BG_Ansi = $BG_Ansi }
+            Write-CellToBuffer -X $currentX -Y $TargetY -Cell $cell -ClippingView $ClippingView
+        }
+        $currentX++
+    }
+}
+
+function global:Show-PmcConsoleBuffer {
+    Write-AppLog "Show-PmcConsoleBuffer: Starting presentation." "TRACE"
+    $output = [System.Text.StringBuilder]::new(16384)
+    $currentTerminalState = @{ FG_Ansi = "39"; BG_Ansi = "49" }
+    
+    for ($y = 0; $y -lt $script:BufferHeight; $y++) {
+        $needsMove = $true
+        for ($x = 0; $x -lt $script:BufferWidth; $x++) {
+            $backCell = $script:BackBuffer[$y][$x]
+            $frontCell = $script:FrontBuffer[$y][$x]
+            $isDifferent = ($backCell.Char -ne $frontCell.Char) -or ($backCell.FG_Ansi -ne $frontCell.FG_Ansi) -or ($backCell.BG_Ansi -ne $frontCell.BG_Ansi)
+            
+            if ($isDifferent) {
+                if ($needsMove) { $output.Append("${esc}[$($y + 1);$($x + 1)H") | Out-Null; $needsMove = $false }
+                
+                if ($backCell.FG_Ansi -ne $currentTerminalState.FG_Ansi) { $output.Append("${esc}[$($backCell.FG_Ansi)m") | Out-Null; $currentTerminalState.FG_Ansi = $backCell.FG_Ansi }
+                if ($backCell.BG_Ansi -ne $currentTerminalState.BG_Ansi) { $output.Append("${esc}[$($backCell.BG_Ansi)m") | Out-Null; $currentTerminalState.BG_Ansi = $backCell.BG_Ansi }
+                
+                $output.Append($backCell.Char) | Out-Null
+                $script:FrontBuffer[$y][$x] = $backCell.Clone()
+            } else {
+                $needsMove = $true
+            }
+        }
+    }
+    
+    if ($currentTerminalState.FG_Ansi -ne '39') { $output.Append($global:ansiFgReset) | Out-Null }
+    if ($currentTerminalState.BG_Ansi -ne '49') { $output.Append($global:ansiBgReset) | Out-Null }
+    
+    if ($output.Length -gt 0) {
+        Write-Host $output.ToString() -NoNewline
+    }
+}
+#endregion
+
+#region Drawing Primitives
+function global:Draw-BoxToBuffer {
+    param ([Parameter(Mandatory=$true)][int]$X, [Parameter(Mandatory=$true)][int]$Y, [Parameter(Mandatory=$true)][int]$Width, [Parameter(Mandatory=$true)][int]$Height, [string]$BorderStyle = "Single", [string]$FG_Ansi = $null, [string]$BG_Ansi = $null, [hashtable]$ClippingView = $null)
+    
+    $effectiveFG = if ($null -ne $FG_Ansi) { $FG_Ansi } else { Get-PmcThemeAnsiCode "Palette.BorderFG" }
+    $effectiveBG = if ($null -ne $BG_Ansi) { $BG_Ansi } else { Get-PmcThemeAnsiCode "Palette.PrimaryBG" }
+    $borderChars = $Global:borderStyles[$BorderStyle]
+    
+    $endX = $X + $Width - 1; $endY = $Y + $Height - 1
+    
+    # Corners
+    Write-CellToBuffer -X $X -Y $Y -Cell @{ Char=$borderChars.TL; FG_Ansi=$effectiveFG; BG_Ansi=$effectiveBG } -ClippingView $ClippingView
+    Write-CellToBuffer -X $endX -Y $Y -Cell @{ Char=$borderChars.TR; FG_Ansi=$effectiveFG; BG_Ansi=$effectiveBG } -ClippingView $ClippingView
+    Write-CellToBuffer -X $X -Y $endY -Cell @{ Char=$borderChars.BL; FG_Ansi=$effectiveFG; BG_Ansi=$effectiveBG } -ClippingView $ClippingView
+    Write-CellToBuffer -X $endX -Y $endY -Cell @{ Char=$borderChars.BR; FG_Ansi=$effectiveFG; BG_Ansi=$effectiveBG } -ClippingView $ClippingView
+
+    # Horizontal Lines
+    $hLineLen = $Width - 2
+    if ($hLineLen -gt 0) {
+        $hLine = $borderChars.T * $hLineLen
+        Write-StringToBuffer -TargetX ($X + 1) -TargetY $Y -String $hLine -FG_Ansi $effectiveFG -BG_Ansi $effectiveBG -ClippingView $ClippingView
+        Write-StringToBuffer -TargetX ($X + 1) -TargetY $endY -String $hLine -FG_Ansi $effectiveFG -BG_Ansi $effectiveBG -ClippingView $ClippingView
+    }
+
+    # Vertical Lines
+    for ($i = $Y + 1; $i -lt $endY; $i++) {
+        Write-CellToBuffer -X $X -Y $i -Cell @{ Char=$borderChars.L; FG_Ansi=$effectiveFG; BG_Ansi=$effectiveBG } -ClippingView $ClippingView
+        Write-CellToBuffer -X $endX -Y $i -Cell @{ Char=$borderChars.R; FG_Ansi=$effectiveFG; BG_Ansi=$effectiveBG } -ClippingView $ClippingView
+    }
+}
+#endregion
+
+#region View Renderers
+function global:Render-LabelView {
+    param( [Parameter(Mandatory = $true)][hashtable]$ViewDefinition )
+    $x = $ViewDefinition.X; $y = $ViewDefinition.Y; $width = $ViewDefinition.Width; $height = $ViewDefinition.Height
+    if ($width -le 0 -or $height -le 0) { return }
+    $clipView = @{ X = $x; Y = $y; Width = $width; Height = $height }
+    $text = ""; try { if ($ViewDefinition.Text -is [scriptblock]) { $text = & $ViewDefinition.Text } else { $text = $ViewDefinition.Text ?? "" } } catch { $text = "[ERR]" }
+    $hAlign = $ViewDefinition.HAlign ?? 'Left'
+    $fgAnsi = if ($ViewDefinition.FG_Ansi) { $ViewDefinition.FG_Ansi } else { Get-PmcThemeAnsiCode "Palette.PrimaryFG" }
+    $bgAnsi = if ($ViewDefinition.BG_Ansi) { $ViewDefinition.BG_Ansi } else { Get-PmcThemeAnsiCode "Palette.PrimaryBG" }
+    $isFocused = $ViewDefinition.IsFocusable -and $ViewDefinition.Name -eq $script:FocusedViewName
+    if ($isFocused) { $fgAnsi = Get-PmcThemeAnsiCode "Palette.FocusTextFG" $fgAnsi; $bgAnsi = Get-PmcThemeAnsiCode "Palette.FocusTextBG" $bgAnsi }
+    
+    $displayText = $text
+    if ($displayText.Length -gt $width) { $displayText = $displayText.Substring(0, [Math]::Min($displayText.Length, $width - 1)) + "…" }
+    
+    switch ($hAlign.ToLowerInvariant()) {
+        'center' { $displayText = $displayText.PadLeft([int](($width + $displayText.Length) / 2)).PadRight($width) }
+        'right' { $displayText = $displayText.PadLeft($width) }
+        default { $displayText = $displayText.PadRight($width) }
+    }
+    
+    Write-StringToBuffer -TargetX $x -TargetY $y -Text $displayText -FG_Ansi $fgAnsi -BG_Ansi $bgAnsi -ClippingView $clipView
+}
+
+function global:Render-ListView {
+    # This is a complex function. The full implementation from pmc19 is recommended.
+    # This is a simplified version for brevity.
+    param( [Parameter(Mandatory = $true)][hashtable]$ViewDefinition )
+    $x = $ViewDefinition.X; $y = $ViewDefinition.Y; $width = $ViewDefinition.Width; $height = $ViewDefinition.Height
+    if ($width -le 0 -or $height -le 0) { return }
+    $clipView = @{ X = $x; Y = $y; Width = $width; Height = $height }
+    
+    $items = @(); try { if ($ViewDefinition.DataSource -is [scriptblock]) { $items = & $ViewDefinition.DataSource } } catch { Write-AppLog "ListView DataSource failed" "ERROR" }
+    
+    $isFocused = $ViewDefinition.IsFocusable -and $ViewDefinition.Name -eq $script:FocusedViewName
+    if ($isFocused) { Draw-BoxToBuffer -X $x -Y $y -Width $width -Height $height -BorderStyle "Single" -FG_Ansi (Get-PmcThemeAnsiCode "Palette.FocusBorderFG") -ClippingView $clipView }
+    
+    $itemY = $y + (if($isFocused){1}else{0})
+    for ($i = 0; $i -lt [Math]::Min($items.Count, $height - (if($isFocused){2}else{0})); $i++) {
+        $item = $items[$i]
+        $text = if ($item -is [hashtable]) { $item.DisplayValue } else { $item.ToString() }
+        if ($text.Length -gt $width-2) { $text = $text.Substring(0, $width-3) + "…" }
+        Write-StringToBuffer -TargetX ($x+1) -TargetY $itemY -Text $text.PadRight($width-2) -ClippingView $clipView
+        $itemY++
+    }
+}
+# ... other Render-*View functions would go here ...
+#endregion

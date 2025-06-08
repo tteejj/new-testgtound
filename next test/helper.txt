@@ -1,0 +1,190 @@
+# helper.ps1 - Core Helper Functions
+# Configuration, Logging, and Data Utilities
+
+#region Logging Functions
+function global:Write-AppLog {
+    param(
+        [string]$Message,
+        [ValidateSet("INFO", "WARN", "ERROR", "DEBUG", "TRACE")][string]$Level = "INFO"
+    )
+    if ($Level -eq "TRACE" -and -not $Global:EnableTraceLogging) { return }
+    if ($null -eq $Global:AppConfig) { Write-Warning "[PRE-LOG] [$Level] $Message"; return }
+    $logPath = $Global:AppConfig.logFilePath
+    if ([string]::IsNullOrWhiteSpace($logPath)) { Write-Warning "[Write-AppLog] Log path missing."; Write-Warning "[$Level] $Message"; return }
+    $maxSizeBytes = ($Global:AppConfig.logMaxSizeMB * 1MB)
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+    $logLine = "$timestamp [$Level] $Message"
+    try {
+        $logDir = Split-Path -Path $logPath -Parent
+        if (-not (Test-Path $logDir -PathType Container)) {
+            try { New-Item -Path $logDir -ItemType Directory -Force -ErrorAction Stop | Out-Null }
+            catch { Write-Warning "!!! Error creating log directory '$logDir': $($_.Exception.Message) !!!"; return }
+        }
+        if ((Test-Path $logPath) -and (Get-Item $logPath).Length -gt $maxSizeBytes) {
+            $backupLogPath = "$logPath.bak"
+            if (Test-Path $backupLogPath) { Remove-Item $backupLogPath -Force -ErrorAction SilentlyContinue }
+            try { Move-Item -Path $logPath -Destination $backupLogPath -Force -ErrorAction Stop }
+            catch { Write-Warning "!!! Error rotating log file '$logPath': $($_.Exception.Message) !!!" }
+        }
+        Add-Content -Path $logPath -Value $logLine -Encoding UTF8 -ErrorAction Stop
+    } catch {
+        Write-Warning "!!! Error writing log '$logPath': $($_.Exception.Message) !!!"
+        Write-Warning "Log Entry: $logLine"
+    }
+}
+function global:Handle-Error {
+    param(
+        [Parameter(ValueFromPipeline=$true)]$ErrorRecord,
+        [string]$Context = "General Operation"
+    )
+    $errMsg = "ERROR in [$Context]: $($ErrorRecord.Exception.Message)"
+    $fullErrMsg = "[$Context] Error: $($ErrorRecord.ToString())`nScriptStackTrace: $($ErrorRecord.ScriptStackTrace)"
+    Write-AppLog $fullErrMsg "ERROR"
+    Show-Error $errMsg
+}
+#endregion
+
+#region Configuration Management
+function global:Get-DefaultConfig {
+    param([string]$BaseDir)
+    $dataDir = Join-Path -Path $BaseDir -ChildPath "_ProductivitySuiteData"
+    return @{
+        projectsFile          = Join-Path -Path $dataDir -ChildPath "projects.json"
+        timeTrackingFile      = Join-Path -Path $dataDir -ChildPath "timetracking.csv"
+        notesFolder           = Join-Path -Path $dataDir -ChildPath "Notes"
+        logFilePath           = Join-Path -Path $dataDir -ChildPath "suite_log.txt"
+        defaultTheme          = "SynthwaveRgb"
+        displayDateFormat     = "yyyy-MM-dd"
+        logMaxSizeMB          = 10
+        dashboardUpcomingDays = 14
+        dashboardMaxTodos     = 10
+        dashboardMaxProjects  = 10
+    }
+}
+
+function global:Load-AppConfig {
+    $configDir = Join-Path $Global:scriptRoot "_ProductivitySuiteData"
+    $configPath = Join-Path $configDir 'config.json'
+    $defaultConfig = Get-DefaultConfig -BaseDir $Global:scriptRoot
+    
+    if (-not (Ensure-DirectoryExists -DirectoryPath $configDir)) {
+        Write-Warning "Using temporary defaults as config directory failed."
+        $Global:AppConfig = $defaultConfig
+        return
+    }
+
+    if (Test-Path $configPath) {
+        Write-AppLog "Loading config from $configPath" "INFO"
+        try {
+            $loadedConfig = Get-Content $configPath -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -EA Stop
+            $mergedConfig = $defaultConfig.Clone()
+            foreach ($key in $loadedConfig.Keys) { $mergedConfig[$key] = $loadedConfig[$key] }
+            $Global:AppConfig = $mergedConfig
+            Write-AppLog "Config loaded successfully." "INFO"
+        } catch {
+            Handle-Error $_ "Loading/Parsing config.json"
+            Write-AppLog "Using default config due to load error." "WARN"
+            $Global:AppConfig = $defaultConfig
+        }
+    } else {
+        Write-AppLog "Config file not found. Creating default: $configPath" "INFO"
+        $Global:AppConfig = $defaultConfig
+        try {
+            $Global:AppConfig | ConvertTo-Json -Depth 5 | Out-File $configPath -Encoding UTF8 -Force -EA Stop
+        } catch { Handle-Error $_ "Saving default config.json" }
+    }
+}
+
+function global:Save-AppConfig {
+    Write-AppLog "Saving application configuration..." "INFO"
+    if ($null -eq $Global:AppConfig) { Write-AppLog "Save-AppConfig: AppConfig is null. Cannot save." "ERROR"; return $false }
+    $configDir = Join-Path $Global:scriptRoot "_ProductivitySuiteData"
+    $configPath = Join-Path $configDir 'config.json'
+    try {
+        $Global:AppConfig | ConvertTo-Json -Depth 5 | Out-File $configPath -Encoding UTF8 -Force -EA Stop
+        Write-AppLog "Saved configuration to '$configPath'." "INFO"
+        return $true
+    } catch {
+        Handle-Error $_ "Saving config.json"
+        Show-Error "Failed to save configuration file."
+        return $false
+    }
+}
+#endregion
+
+#region Data & Utility Helpers
+function global:Ensure-DirectoryExists {
+    param([string]$DirectoryPath)
+    if (-not (Test-Path $DirectoryPath -PathType Container)) {
+        try {
+            New-Item -Path $DirectoryPath -ItemType Directory -Force -EA Stop | Out-Null
+            Write-AppLog "Created directory: $DirectoryPath" "INFO"
+            return $true
+        } catch {
+            Handle-Error $_ "Creating directory '$DirectoryPath'"
+            return $false
+        }
+    }
+    return $true
+}
+
+function global:Get-CsvDataSafely {
+    param([string]$FilePath)
+    if (-not (Test-Path $FilePath)) { Write-AppLog "CSV file not found: $FilePath" "WARN"; return @() }
+    try {
+        $data = Import-Csv -Path $FilePath -Encoding UTF8 -ErrorAction Stop
+        Write-AppLog "Read $($data.Count) records from CSV: $FilePath" "DEBUG"
+        return @($data)
+    } catch {
+        Handle-Error $_ "Reading CSV '$FilePath'"
+        return @()
+    }
+}
+
+function global:Set-CsvData {
+    param([string]$FilePath, [array]$Data)
+    try {
+        $Data | Export-Csv -Path $FilePath -NoTypeInformation -Encoding UTF8 -Force -ErrorAction Stop
+        Write-AppLog "Wrote $($Data.Count) records to CSV: $FilePath" "INFO"
+        return $true
+    } catch {
+        Handle-Error $_ "Writing CSV '$FilePath'"
+        return $false
+    }
+}
+
+function global:Format-DateSafeDisplay {
+    param ([string]$DateStringInternal)
+    if ([string]::IsNullOrWhiteSpace($DateStringInternal)) { return "" }
+    $formatToUse = $Global:AppConfig.displayDateFormat ?? "yyyy-MM-dd"
+    if ($DateStringInternal -match "^\d{8}$") {
+        try {
+            $parsedDate = [datetime]::ParseExact($DateStringInternal, "yyyyMMdd", [System.Globalization.CultureInfo]::InvariantCulture)
+            return $parsedDate.ToString($formatToUse)
+        } catch {
+            Write-AppLog "Error parsing date '$DateStringInternal' using internal format: $($_.Exception.Message)" "WARN"
+            return "InvalidDate"
+        }
+    }
+    return $DateStringInternal
+}
+
+function global:Parse-DateSafeInternal {
+    param ([string]$DateStringInput)
+    if ([string]::IsNullOrWhiteSpace($DateStringInput)) { return "" }
+    $formatsToTry = @(
+        $Global:AppConfig.displayDateFormat ?? "yyyy-MM-dd",
+        "yyyyMMdd", "yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy", "dd-MMM-yyyy",
+        "yyyy.MM.dd", "dd.MM.yyyy", "d/M/yyyy", "M/d/yyyy"
+    ) | Select-Object -Unique
+
+    foreach ($format in $formatsToTry) {
+        try {
+            $parsedDate = [datetime]::ParseExact($DateStringInput, $format, [System.Globalization.CultureInfo]::InvariantCulture)
+            return $parsedDate.ToString("yyyyMMdd")
+        } catch {}
+    }
+    Write-AppLog "Could not parse date input '$DateStringInput' into internal format." "WARN"
+    return ""
+}
+#endregion
