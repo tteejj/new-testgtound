@@ -1,144 +1,241 @@
-# Time Entry Form Screen - Built with the v3.0 Framework
+# Time Entry Form Screen Module - Demonstrates new declarative form pattern
 
-function Get-TimeEntryFormScreen {
+function global:Get-TimeEntryFormScreen {
     $formScreen = @{
         Name = "TimeEntryFormScreen"
         State = @{
-            Project         = $null
-            Hours           = ""
-            Description     = ""
-            HoursCursor     = 0
-            DescriptionCursor = 0
-            FocusedChildName = "project_dropdown"
+            Project = $null
+            Hours = ""
+            Description = ""
+            Date = (Get-Date).ToString("yyyy-MM-dd")
+            FocusedField = "project"
+            ValidationErrors = @{}
         }
         
-        # Fixed: Create form container ONCE in Init
         Init = {
             param($self)
+            # Pre-populate with project from context if available
+            if ($script:ContextData -and $script:ContextData.ProjectKey) {
+                $self.State.Project = $script:ContextData.ProjectKey
+                $self.State.FocusedField = "hours"
+            }
+        }
+        
+        Render = {
+            param($self)
             
-            # Create the persistent form container
-            $self.FormContainer = New-TuiForm -Props @{
-                X = ([Math]::Floor(($script:TuiState.BufferWidth - 60) / 2))
-                Y = 4
-                Width = 60
-                Height = 20
-                Title = " Add Time Entry "
-                Padding = 2
-                Children = @(
-                    New-TuiLabel -Props @{
-                        Name = "project_label"
-                        X = 0
-                        Y = 0
-                        Text = "Project:"
-                    }
-                    New-TuiDropdown -Props @{
-                        Name = "project_dropdown"
-                        X = 0
-                        Y = 1
-                        Width = 56
-                        Options = @($script:Data.Projects.GetEnumerator() | ForEach-Object { 
-                            @{ Value = $_.Key; Display = $_.Value.Name } 
-                        })
-                        ValueProp = "Project"
-                        OnChange = { 
-                            param($NewValue) 
-                            $formScreen.State.Project = $NewValue
-                            Request-TuiRefresh 
-                        }
-                    }
-                    New-TuiLabel -Props @{
-                        Name = "hours_label"
-                        X = 0
-                        Y = 4
-                        Text = "Hours:"
-                    }
-                    New-TuiTextBox -Props @{
-                        Name = "hours_textbox"
-                        X = 0
-                        Y = 5
-                        Width = 56
-                        Placeholder = "e.g., 2.5"
-                        TextProp = "Hours"
-                        CursorProp = "HoursCursor"
-                        OnChange = { 
-                            param($NewText, $NewCursorPosition) 
-                            $formScreen.State.Hours = $NewText
-                            $formScreen.State.HoursCursor = $NewCursorPosition
-                            Request-TuiRefresh 
-                        }
-                    }
-                    New-TuiLabel -Props @{
-                        Name = "description_label"
-                        X = 0
-                        Y = 8
-                        Text = "Description:"
-                    }
-                    New-TuiTextBox -Props @{
-                        Name = "description_textbox"
-                        X = 0
-                        Y = 9
-                        Width = 56
-                        Placeholder = "Work details..."
-                        TextProp = "Description"
-                        CursorProp = "DescriptionCursor"
-                        OnChange = { 
-                            param($NewText, $NewCursorPosition) 
-                            $formScreen.State.Description = $NewText
-                            $formScreen.State.DescriptionCursor = $NewCursorPosition
-                            Request-TuiRefresh 
-                        }
-                    }
-                    New-TuiButton -Props @{
-                        Name = "submit_button"
-                        X = 0
-                        Y = 13
-                        Width = 12
-                        Text = "Submit"
-                        OnClick = {
-                            Publish-Event -EventName "Data.Create.TimeEntry" -Data @{
-                                Project = $formScreen.State.Project
-                                Hours = $formScreen.State.Hours
-                                Description = $formScreen.State.Description
+            # Center the form
+            $formWidth = 60
+            $formHeight = 20
+            $formX = [Math]::Floor(($script:TuiState.BufferWidth - $formWidth) / 2)
+            $formY = [Math]::Floor(($script:TuiState.BufferHeight - $formHeight) / 2)
+            
+            # Main form container
+            Write-BufferBox -X $formX -Y $formY -Width $formWidth -Height $formHeight -Title " Add Time Entry " -BorderColor (Get-ThemeColor "Accent")
+            
+            $fieldX = $formX + 3
+            $currentY = $formY + 3
+            
+            # Project selection
+            $self.RenderFormField("Project/Template:", $fieldX, $currentY, "project")
+            if ($self.State.Project) {
+                $project = Get-ProjectOrTemplate $self.State.Project
+                if ($project) {
+                    Write-BufferString -X ($fieldX + 18) -Y $currentY -Text $project.Name -ForegroundColor (Get-ThemeColor "Success")
+                } else {
+                    Write-BufferString -X ($fieldX + 18) -Y $currentY -Text "Invalid Project" -ForegroundColor (Get-ThemeColor "Error")
+                }
+            } else {
+                Write-BufferString -X ($fieldX + 18) -Y $currentY -Text "[Select Project]" -ForegroundColor (Get-ThemeColor "Subtle")
+            }
+            $currentY += 3
+            
+            # Hours input
+            $self.RenderFormField("Hours:", $fieldX, $currentY, "hours")
+            $self.RenderTextInput($fieldX + 18, $currentY, 20, $self.State.Hours, "hours")
+            if ($self.State.ValidationErrors.Hours) {
+                Write-BufferString -X ($fieldX + 18) -Y ($currentY + 1) -Text $self.State.ValidationErrors.Hours -ForegroundColor (Get-ThemeColor "Error")
+            }
+            $currentY += 3
+            
+            # Description input
+            $self.RenderFormField("Description:", $fieldX, $currentY, "description")
+            $self.RenderTextInput($fieldX + 18, $currentY, 35, $self.State.Description, "description")
+            $currentY += 3
+            
+            # Date input
+            $self.RenderFormField("Date:", $fieldX, $currentY, "date")
+            $self.RenderTextInput($fieldX + 18, $currentY, 12, $self.State.Date, "date")
+            $currentY += 4
+            
+            # Action buttons
+            $buttonY = $formY + $formHeight - 4
+            $self.RenderButton($fieldX + 15, $buttonY, "Submit", "submit")
+            $self.RenderButton($fieldX + 30, $buttonY, "Cancel", "cancel")
+            
+            # Instructions
+            Write-BufferString -X $fieldX -Y ($formY + $formHeight - 2) -Text "Tab: Next Field • Enter: Submit • Esc: Cancel" -ForegroundColor (Get-ThemeColor "Subtle")
+        }
+        
+        HandleInput = {
+            param($self, $Key)
+            
+            # Global navigation
+            switch ($Key.Key) {
+                ([ConsoleKey]::Escape) { return "Back" }
+                ([ConsoleKey]::Tab) {
+                    $fields = @("project", "hours", "description", "date", "submit", "cancel")
+                    $currentIndex = [array]::IndexOf($fields, $self.State.FocusedField)
+                    $direction = if ($Key.Modifiers -band [ConsoleModifiers]::Shift) { -1 } else { 1 }
+                    $newIndex = ($currentIndex + $direction + $fields.Count) % $fields.Count
+                    $self.State.FocusedField = $fields[$newIndex]
+                    return $true
+                }
+                ([ConsoleKey]::Enter) {
+                    if ($self.State.FocusedField -eq "submit") {
+                        return $self.SubmitForm()
+                    } elseif ($self.State.FocusedField -eq "cancel") {
+                        return "Back"
+                    } elseif ($self.State.FocusedField -eq "project") {
+                        if (Get-Command -Name "Get-ProjectSelectorScreen" -ErrorAction SilentlyContinue) {
+                            Push-Screen -Screen (Get-ProjectSelectorScreen -OnSelect { 
+                                param($ProjectKey) 
+                                $self.State.Project = $ProjectKey
+                                Pop-Screen
+                            })
+                        } else {
+                            # Simple project input dialog
+                            Show-InputDialog -Data @{
+                                Title = "Enter Project Key"
+                                Prompt = "Project key (e.g., PROJ1):"
+                                OnSubmit = {
+                                    param($value)
+                                    $self.State.Project = $value
+                                    Request-TuiRefresh
+                                }
                             }
                         }
+                        return $true
                     }
-                    New-TuiButton -Props @{
-                        Name = "cancel_button"
-                        X = 14
-                        Y = 13
-                        Width = 12
-                        Text = "Cancel"
-                        OnClick = { Pop-Screen | Out-Null }
-                    }
-                )
-                OnFocusChange = { 
-                    param($NewFocusedChildName) 
-                    $formScreen.State.FocusedChildName = $NewFocusedChildName
-                    Request-TuiRefresh 
+                }
+            }
+            
+            # Field-specific input handling
+            switch ($self.State.FocusedField) {
+                "hours" {
+                    return $self.HandleTextInput($Key, "Hours")
+                }
+                "description" {
+                    return $self.HandleTextInput($Key, "Description")
+                }
+                "date" {
+                    return $self.HandleDateInput($Key)
+                }
+            }
+            
+            return $false
+        }
+        
+        # Helper methods
+        RenderFormField = {
+            param($label, $x, $y, $fieldName)
+            $color = if ($this.State.FocusedField -eq $fieldName) { Get-ThemeColor "Warning" } else { Get-ThemeColor "Primary" }
+            Write-BufferString -X $x -Y $y -Text $label -ForegroundColor $color
+        }
+        
+        RenderTextInput = {
+            param($x, $y, $width, $text, $fieldName)
+            $isFocused = ($this.State.FocusedField -eq $fieldName)
+            $borderColor = if ($isFocused) { Get-ThemeColor "Accent" } else { Get-ThemeColor "Secondary" }
+            
+            # Input box
+            Write-BufferString -X $x -Y $y -Text ("[" + $text.PadRight($width - 2) + "]") -ForegroundColor $borderColor
+            
+            # Cursor
+            if ($isFocused) {
+                $cursorX = $x + 1 + $text.Length
+                if ($cursorX -lt $x + $width - 1) {
+                    Write-BufferString -X $cursorX -Y $y -Text "_" -ForegroundColor (Get-ThemeColor "Warning")
                 }
             }
         }
         
-        # Fixed: Render now just updates state and delegates
-        Render = {
-            param($self)
-            $self.FormContainer.State = $self.State
-            & $self.FormContainer.Render -self $self.FormContainer
+        RenderButton = {
+            param($x, $y, $text, $buttonName)
+            $isFocused = ($this.State.FocusedField -eq $buttonName)
+            $color = if ($isFocused) { Get-ThemeColor "Warning" } else { Get-ThemeColor "Primary" }
+            $prefix = if ($isFocused) { "[" } else { " " }
+            $suffix = if ($isFocused) { "]" } else { " " }
+            Write-BufferString -X $x -Y $y -Text "$prefix$text$suffix" -ForegroundColor $color
         }
         
-        # Fixed: HandleInput updates state and delegates
-        HandleInput = {
-            param($self, $Key)
-            if ($Key.Key -eq [ConsoleKey]::Escape) {
-                return "Back"
+        HandleTextInput = {
+            param($key, $fieldName)
+            $text = $this.State.$fieldName
+            
+            switch ($key.Key) {
+                ([ConsoleKey]::Backspace) {
+                    if ($text.Length -gt 0) {
+                        $this.State.$fieldName = $text.Substring(0, $text.Length - 1)
+                        $this.State.ValidationErrors.Remove($fieldName)
+                    }
+                }
+                default {
+                    if ($key.KeyChar -and -not [char]::IsControl($key.KeyChar)) {
+                        $this.State.$fieldName = $text + $key.KeyChar
+                        $this.State.ValidationErrors.Remove($fieldName)
+                    }
+                }
+            }
+            return $true
+        }
+        
+        HandleDateInput = {
+            param($key)
+            # Special handling for date format validation
+            return $this.HandleTextInput($key, "Date")
+        }
+        
+        SubmitForm = {
+            # Clear previous validation errors
+            $this.State.ValidationErrors = @{}
+            
+            # Validation
+            if (-not $this.State.Project) {
+                $this.State.ValidationErrors.Project = "Project is required"
+                $this.State.FocusedField = "project"
+                return $true
             }
             
-            $self.FormContainer.State = $self.State
-            return & $self.FormContainer.HandleInput -self $self.FormContainer -Key $Key
+            $hours = 0.0
+            if (-not [double]::TryParse($this.State.Hours, [ref]$hours) -or $hours -le 0) {
+                $this.State.ValidationErrors.Hours = "Valid hours required (e.g., 2.5)"
+                $this.State.FocusedField = "hours"
+                return $true
+            }
+            
+            try {
+                $date = [DateTime]::Parse($this.State.Date)
+            } catch {
+                $this.State.ValidationErrors.Date = "Invalid date format"
+                $this.State.FocusedField = "date"
+                return $true
+            }
+            
+            # If validation passes, publish the event
+            Publish-Event -EventName "Data.Create.TimeEntry" -Data @{
+                Project = $this.State.Project
+                Hours = $hours
+                Description = $this.State.Description
+                Date = $date.ToString("yyyy-MM-dd")
+            }
+            
+            return "Back"
         }
     }
     
     return $formScreen
 }
 
+# Export module members
 Export-ModuleMember -Function 'Get-TimeEntryFormScreen'
