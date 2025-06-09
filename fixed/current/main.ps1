@@ -54,17 +54,25 @@ foreach ($module in $screenModules) {
 # Initialize application
 function Start-PMCTerminal {
     try {
-        # Initialize core systems
-        Initialize-TuiEngine
+        # --- CORRECT INITIALIZATION ORDER ---
+
+        # 1. Start the communication bus first
         Initialize-EventSystem
+        
+        # 2. Load all data and settings from disk
+        Load-UnifiedData
+        
+        # 3. Initialize systems that depend on data/settings
         Initialize-ThemeManager
         Initialize-DialogSystem
         
-        # Load application data
-        Load-UnifiedData
+        # 4. Initialize the main TUI engine, which needs themes for color
+        Initialize-TuiEngine
         
-        # Initialize event handlers
+        # 5. Register all the application logic event handlers last
         Initialize-DataEventHandlers
+        
+        # --- END OF CORRECTIONS ---
         
         # Start with dashboard screen
         $dashboardScreen = Get-DashboardScreen
@@ -92,6 +100,7 @@ function Start-PMCTerminal {
         }
     }
 }
+
 
 # Check for command line arguments
 if ($args.Count -gt 0) {
