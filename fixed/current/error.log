@@ -1,0 +1,60 @@
+# PMC Terminal Error Log - Cleared
+# New session starting...
+----------------------------------------------------
+Timestamp: 2025-06-08 23:22:27
+Error: You cannot call a method on a null-valued expression.
+Stack Trace:
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\screens\time-entry-screen.psm1: line 39
+at global:Push-Screen, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\tui-engine-v2.psm1: line 143
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\screens\time-tracking-menu-screen.psm1: line 66
+at global:Start-TuiLoop, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\tui-engine-v2.psm1: line 82
+at Start-PmcTerminal, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\main.ps1: line 156
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\main.ps1: line 183
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\test-system.ps1: line 65
+at <ScriptBlock>, <No file>: line 1
+----------------------------------------------------
+----------------------------------------------------
+Timestamp: 2025-06-09 05:52:33
+Error: The term 'Get-DashboardScreen' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+Stack Trace:
+at Start-PmcTerminal, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\main.ps1: line 153
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\main.ps1: line 183
+at <ScriptBlock>, <No file>: line 1
+----------------------------------------------------
+----------------------------------------------------
+Timestamp: 2025-06-09 06:09:56
+Error: You cannot call a method on a null-valued expression.
+Stack Trace:
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\screens\project-management-screen.psm1: line 19
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\screens\project-management-screen.psm1: line 14
+at global:Push-Screen, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\tui-engine-v2.psm1: line 143
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\screens\dashboard-screen.psm1: line 151
+at global:Start-TuiLoop, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\tui-engine-v2.psm1: line 82
+at Start-PmcTerminal, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\main.ps1: line 156
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\main.ps1: line 183
+at <ScriptBlock>, <No file>: line 1
+----------------------------------------------------
+----------------------------------------------------
+Timestamp: 2025-06-09 06:32:42
+Error: The property 'Theme' cannot be found on this object. Verify that the property exists and can be set.
+Stack Trace:
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\screens\settings-screen.psm1: line 221
+at global:Start-TuiLoop, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\tui-engine-v2.psm1: line 82
+at Start-PmcTerminal, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\main.ps1: line 156
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\main.ps1: line 183
+at <ScriptBlock>, <No file>: line 1
+----------------------------------------------------
+----------------------------------------------------
+Timestamp: 2025-06-09 06:32:52
+Error: You cannot call a method on a null-valued expression.
+Stack Trace:
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\screens\project-management-screen.psm1: line 19
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\screens\project-management-screen.psm1: line 14
+at global:Push-Screen, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\tui-engine-v2.psm1: line 143
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\screens\dashboard-screen.psm1: line 151
+at global:Start-TuiLoop, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\tui-engine-v2.psm1: line 82
+at Start-PmcTerminal, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\main.ps1: line 156
+at <ScriptBlock>, C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current\main.ps1: line 183
+at <ScriptBlock>, <No file>: line 1
+----------------------------------------------------

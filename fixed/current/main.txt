@@ -1,0 +1,354 @@
+# PMC Terminal - Main Entry Point (Definitive, Merged Version)
+# Contains all core logic, including the full dashboard, to ensure stability and eliminate scope errors.
+
+#region Module Loading & Configuration
+
+# Determine the root directory of the script and set up error logging
+$script:ModuleRoot = $PSScriptRoot
+if (-not $script:ModuleRoot) {
+    try { $script:ModuleRoot = Split-Path $MyInvocation.MyCommand.Path -Parent }
+    catch { Write-Error "Could not determine script root. Please run as a .ps1 file."; exit 1 }
+}
+$script:ErrorLogPath = Join-Path $script:ModuleRoot "pmc-error.log"
+
+# Define module load order (dependencies first)
+# NOTE: dashboard-screen.psm1 is REMOVED because its logic is now merged into this file.
+$moduleLoadOrder = @(
+    'event-system.psm1',
+    'tui-engine-v2.psm1',
+    'tui-components.psm1',
+    'tui-components-extended.psm1',
+    'dialog-system.psm1',
+    'data-manager.psm1',
+    # Screen Modules
+    'time-entry-screen.psm1',
+    'time-entries-list-screen.psm1',
+    'task-management-screen.psm1',
+    'timer-management-screen.psm1'
+)
+
+# Load modules in specified order
+foreach ($moduleName in $moduleLoadOrder) {
+    $modulePath = Join-Path $script:ModuleRoot $moduleName
+    if (Test-Path $modulePath) {
+        Write-Host "Loading module: $moduleName" -ForegroundColor DarkGray
+        Import-Module $modulePath -Force -Global
+    } else {
+        Write-Warning "Required module not found: $modulePath"
+    }
+}
+
+#endregion
+
+#region Error Handling
+
+function Log-Error {
+    param([System.Exception]$Exception)
+    $errorMessage = @"
+----------------------------------------------------
+Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+Error: $($Exception.Message)
+Stack Trace:
+$($Exception.StackTrace)
+$($Exception.ScriptStackTrace)
+----------------------------------------------------
+"@
+    Add-Content -Path $script:ErrorLogPath -Value $errorMessage
+}
+
+#endregion
+
+#region System Initializers
+
+function Initialize-SystemHandlers {
+    Subscribe-Event -EventName "Navigation.PopScreen" -Handler { Pop-Screen }
+    Subscribe-Event -EventName "Navigation.PushScreen" -Handler { param($EventData) Push-Screen -Screen $EventData.Data.Screen }
+    Subscribe-Event -EventName "Navigation.GoHome" -Handler {
+        while (Pop-Screen) { }
+        Push-Screen -Screen (Get-DashboardScreen)
+    }
+    Subscribe-Event -EventName "App.Exit" -Handler { $script:TuiState.Running = $false }
+}
+
+function Initialize-NotificationSystem {
+    $script:NotificationState = @{ Current = $null; Timer = $null }
+    
+    Subscribe-Event -EventName "Notification.Show" -Handler {
+        param($EventData)
+        $notification = $EventData.Data
+        $script:NotificationState.Current = @{ Text = $notification.Text ?? "Notification"; Type = $notification.Type ?? "Info" }
+        Request-TuiRefresh
+        if ($script:NotificationState.Timer) { $script:NotificationState.Timer.Dispose() }
+        $script:NotificationState.Timer = New-Object System.Timers.Timer
+        $script:NotificationState.Timer.Interval = 3000
+        $script:NotificationState.Timer.AutoReset = $false
+        Register-ObjectEvent -InputObject $script:NotificationState.Timer -EventName Elapsed -Action {
+            $script:NotificationState.Current = $null; Request-TuiRefresh
+        } | Out-Null
+        $script:NotificationState.Timer.Start()
+    }
+    
+    Subscribe-Event -EventName "Screen.Pushed" -Handler {
+        if (-not $script:TuiState.CurrentScreen) { return }
+        $originalRender = $script:TuiState.CurrentScreen.Render
+        $script:TuiState.CurrentScreen.Render = {
+            param($self)
+            & $originalRender -self $self
+            if ($script:NotificationState.Current) {
+                $notif = $script:NotificationState.Current; $text = " $($notif.Text) "; $width = [Math]::Max($text.Length + 4, 30); $height = 5
+                $x = [Math]::Floor(($script:TuiState.BufferWidth - $width) / 2); $y = [Math]::Floor(($script:TuiState.BufferHeight - $height) / 2)
+                $bgColor = switch ($notif.Type) {
+                    "Success" { [ConsoleColor]::DarkGreen }; "Error" { [ConsoleColor]::DarkRed }
+                    "Warning" { [ConsoleColor]::DarkYellow }; default { [ConsoleColor]::DarkBlue }
+                }
+                Write-BufferBox -X $x -Y $y -Width $width -Height $height -BorderStyle "Double" -BorderColor 'White' -BackgroundColor $bgColor
+                $textX = $x + [Math]::Floor(($width - $text.Length) / 2)
+                Write-BufferString -X $textX -Y ($y + 2) -Text $text -ForegroundColor 'White' -BackgroundColor $bgColor
+            }
+        }.GetNewClosure()
+    }
+}
+
+#endregion
+
+#region Dashboard Screen Definition (MERGED)
+
+# Helper function for the dashboard
+function Get-WeekStart {
+    $today = Get-Date
+    $dayOfWeek = ($today.DayOfWeek.value__ + 6) % 7
+    return $today.AddDays(-$dayOfWeek).Date
+}
+
+# All dashboard rendering components are now local to this script
+function Render-DashboardHeader {
+    $headerLines = @(
+        "╔═══════════════════════════════════════════════════════════════════════╗",
+        "║  ██╗   ██╗███╗   ██╗██╗███████╗██╗███████╗██████╗     ██╗   ██╗███████╗ ║",
+        "║  ██║   ██║████╗  ██║██║██╔════╝██║██╔════╝██╔══██╗    ██║   ██║██╔════╝ ║",
+        "║  ██║   ██║██╔██╗ ██║██║█████╗  ██║█████╗  ██║  ██║    ██║   ██║███████╗ ║",
+        "║  ██║   ██║██║╚██╗██║██║██╔══╝  ██║██╔══╝  ██║  ██║    ╚██╗ ██╔╝╚════██║ ║",
+        "║  ╚██████╔╝██║ ╚████║██║██║     ██║███████╗██████╔╝     ╚████╔╝ ███████║ ║",
+        "║   ╚═════╝ ╚═╝  ╚═══╝╚═╝╚═╝     ╚═╝╚══════╝╚═════╝       ╚═══╝  ╚══════╝ ║",
+        "║                  🚀 PRODUCTIVITY SUITE v5.0 TURBO 🚀                     ║",
+        "╚═══════════════════════════════════════════════════════════════════════╝"
+    )
+    $colors = @('DarkCyan', 'Cyan', 'Cyan', 'Cyan', 'Cyan', 'Cyan', 'Cyan', 'Yellow', 'DarkCyan')
+    $startX = [Math]::Floor(([Console]::WindowWidth - 75) / 2)
+    for ($i = 0; $i -lt $headerLines.Count; $i++) {
+        Write-BufferString -X $startX -Y $i -Text $headerLines[$i] -ForegroundColor (Get-ThemeColor $colors[$i])
+    }
+}
+
+function Render-StatusCards {
+    param([int]$Y)
+    $activeTimers = if ($script:Data.ActiveTimers) { $script:Data.ActiveTimers.Count } else { 0 }
+    $activeTasks = if ($script:Data.Tasks) { ($script:Data.Tasks | Where-Object { -not $_.Completed }).Count } else { 0 }
+    $todayHours = 0.0
+    if ($script:Data.TimeEntries) {
+        $todayHours = ($script:Data.TimeEntries | Where-Object { $_.Date -eq (Get-Date).ToString("yyyy-MM-dd") } | Measure-Object -Property Hours -Sum).Sum
+        $todayHours = if ($todayHours) { [Math]::Round($todayHours, 2) } else { 0.0 }
+    }
+    $cards = @(
+        @{ Icon = "📅"; Title = "TODAY"; Value = (Get-Date).ToString("MMM dd"); Subtitle = (Get-Date).ToString("dddd") },
+        @{ Icon = "⏱️"; Title = "HOURS"; Value = "$todayHours"; Subtitle = "logged today" },
+        @{ Icon = "⏰"; Title = "TIMERS"; Value = "$activeTimers"; Subtitle = "active" },
+        @{ Icon = "✅"; Title = "TASKS"; Value = "$activeTasks"; Subtitle = "pending" }
+    )
+    $cardWidth = 18; $totalWidth = ($cardWidth * 4) + 3; $startX = [Math]::Floor(([Console]::WindowWidth - $totalWidth) / 2)
+    for ($i = 0; $i -lt $cards.Count; $i++) {
+        $card = $cards[$i]; $x = $startX + ($i * ($cardWidth + 1))
+        $colorName = "Primary"; if ($i -eq 1) { $colorName = if ($todayHours -ge 6) { "Success" } else { "Warning" } }
+        elseif ($i -eq 2) { $colorName = if ($activeTimers -gt 0) { "Error" } else { "Subtle" } }
+        elseif ($i -eq 3) { $colorName = if ($activeTasks -gt 10) { "Error" } elseif ($activeTasks -gt 5) { "Warning" } else { "Success" } }
+        $color = Get-ThemeColor $colorName
+        Write-BufferBox -X $x -Y $Y -Width $cardWidth -Height 5 -BorderColor $color
+        Write-BufferString -X ($x + 2) -Y ($Y + 1) -Text "$($card.Icon) $($card.Title)" -ForegroundColor $color
+        Write-BufferString -X ($x + 2) -Y ($Y + 2) -Text $card.Value -ForegroundColor $color
+        Write-BufferString -X ($x + 2) -Y ($Y + 3) -Text $card.Subtitle -ForegroundColor (Get-ThemeColor "Subtle")
+    }
+}
+
+function Render-ActivityTimeline {
+    param([int]$Y)
+    $title = "📊 ACTIVITY TIMELINE"; $startX = [Math]::Floor(([Console]::WindowWidth - 60) / 2)
+    Write-BufferString -X $startX -Y $Y -Text $title -ForegroundColor (Get-ThemeColor "Info")
+    if (-not $script:Data -or -not $script:Data.TimeEntries) {
+        Write-BufferString -X $startX -Y ($Y + 1) -Text "No activity data available" -ForegroundColor (Get-ThemeColor "Subtle"); return
+    }
+    $weekStart = Get-WeekStart; $sparklineChars = @(" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"); $weekData = @()
+    for ($i = 0; $i -lt 7; $i++) {
+        $date = $weekStart.AddDays($i).ToString("yyyy-MM-dd")
+        $dayHours = ($script:Data.TimeEntries | Where-Object { $_.Date -eq $date } | Measure-Object -Property Hours -Sum).Sum
+        $weekData += if ($dayHours) { [Math]::Min($dayHours, 10) } else { 0 }
+    }
+    $maxHours = ($weekData | Measure-Object -Maximum).Maximum; if ($maxHours -eq 0) { $maxHours = 1 }
+    $sparkX = $startX + 3
+    for ($i = 0; $i -lt 7; $i++) {
+        $normalized = [Math]::Floor(($weekData[$i] / $maxHours) * ($sparklineChars.Count - 1))
+        $char = $sparklineChars[$normalized]
+        $isToday = $weekStart.AddDays($i).Date -eq (Get-Date).Date
+        $colorName = if ($weekData[$i] -ge 6) { "Success" } elseif ($weekData[$i] -gt 0) { "Warning" } else { "Subtle" }
+        if ($isToday) {
+            Write-BufferString -X ($sparkX + ($i * 4) - 1) -Y ($Y + 2) -Text "[" -ForegroundColor (Get-ThemeColor "Success")
+            Write-BufferString -X ($sparkX + ($i * 4)) -Y ($Y + 2) -Text $char -ForegroundColor (Get-ThemeColor $colorName)
+            Write-BufferString -X ($sparkX + ($i * 4) + 1) -Y ($Y + 2) -Text "]" -ForegroundColor (Get-ThemeColor "Success")
+        } else {
+            Write-BufferString -X ($sparkX + ($i * 4)) -Y ($Y + 2) -Text $char -ForegroundColor (Get-ThemeColor $colorName)
+        }
+    }
+    $totalHours = [Math]::Round(($weekData | Measure-Object -Sum).Sum, 1)
+    Write-BufferString -X ($sparkX + 30) -Y ($Y + 2) -Text "→ ${totalHours}h this week" -ForegroundColor (Get-ThemeColor "Primary")
+}
+
+function Render-QuickActions {
+    param([int]$Y, $QuickActions)
+    $title = "⚡ QUICK ACTIONS"; $startX = [Math]::Floor(([Console]::WindowWidth - 60) / 2)
+    Write-BufferString -X $startX -Y $Y -Text $title -ForegroundColor (Get-ThemeColor "Warning")
+    $actionsPerRow = 3
+    for ($i = 0; $i -lt $QuickActions.Count; $i += $actionsPerRow) {
+        $rowX = $startX + 3; $rowY = $Y + 2 + ($i / $actionsPerRow)
+        for ($j = 0; $j -lt $actionsPerRow -and ($i + $j) -lt $QuickActions.Count; $j++) {
+            $action = $QuickActions[$i + $j]; $actionX = $rowX + ($j * 20)
+            Write-BufferString -X $actionX -Y $rowY -Text "[$($action.Key)]" -ForegroundColor (Get-ThemeColor "Accent")
+            Write-BufferString -X ($actionX + 4) -Y $rowY -Text "$($action.Icon) $($action.Label)" -ForegroundColor (Get-ThemeColor "Primary")
+        }
+    }
+}
+
+function Render-MainMenu {
+    param([int]$Y, [int]$Selected, $MenuItems)
+    $title = "🎯 MAIN MENU"; $startX = [Math]::Floor(([Console]::WindowWidth - 40) / 2)
+    Write-BufferString -X $startX -Y $Y -Text $title -ForegroundColor (Get-ThemeColor "Info")
+    for ($i = 0; $i -lt $MenuItems.Count; $i++) {
+        $item = $MenuItems[$i]; $itemY = $Y + 2 + $i
+        $bgColor = Get-ThemeColor "Background"
+        if ($i -eq $Selected) {
+            Write-BufferString -X ($startX - 2) -Y $itemY -Text "►" -ForegroundColor (Get-ThemeColor "Warning")
+            $bgColor = Get-ThemeColor "Secondary"
+        }
+        Write-BufferString -X $startX -Y $itemY -Text "[$($item.Key)]" -ForegroundColor (Get-ThemeColor "Subtle") -BackgroundColor $bgColor
+        Write-BufferString -X ($startX + 4) -Y $itemY -Text "$($item.Icon) $($item.Label)".PadRight(25) -ForegroundColor (Get-ThemeColor "Primary") -BackgroundColor $bgColor
+    }
+    $quitY = $Y + 2 + $MenuItems.Count + 1
+    Write-BufferString -X $startX -Y $quitY -Text "[Q] 🚪 Quit" -ForegroundColor (Get-ThemeColor "Error")
+}
+
+# The main function to create the dashboard screen object
+function Get-DashboardScreen {
+    $screen = @{
+        Name = "DashboardScreen"
+        State = @{
+            SelectedMenuItem = 0
+            MenuItems = @(
+                @{ Key = "1"; Label = "Time Management"; Icon = "⏰"; Action = { Push-Screen -Screen (Get-TimerManagementScreen) } },
+                @{ Key = "2"; Label = "Task Management"; Icon = "📋"; Action = { Push-Screen -Screen (Get-TaskManagementScreen) } },
+                @{ Key = "3"; Label = "View Time Entries"; Icon = "📈"; Action = { Push-Screen -Screen (Get-TimeEntriesListScreen) } },
+                @{ Key = "4"; Label = "Projects & Clients"; Icon = "🏢"; Action = { Publish-Event "Notification.Show" @{ Text="Projects not implemented"; Type="Info" } } },
+                @{ Key = "5"; Label = "Tools & Utilities"; Icon = "🔧"; Action = { Publish-Event "Notification.Show" @{ Text="Tools not implemented"; Type="Info" } } },
+                @{ Key = "6"; Label = "Settings & Config"; Icon = "⚙️"; Action = { Publish-Event "Notification.Show" @{ Text="Settings not implemented"; Type="Info" } } }
+            )
+            QuickActions = @(
+                @{ Key = "M"; Label = "Manual Entry"; Icon = "📝"; Action = { Push-Screen -Screen (Get-TimeEntryFormScreen) } },
+                @{ Key = "S"; Label = "Start Timer"; Icon = "▶️"; Action = { Push-Screen -Screen (Get-StartTimerScreen) } },
+                @{ Key = "A"; Label = "Add Task"; Icon = "➕"; Action = { Push-Screen -Screen (Get-AddTaskScreen) } },
+                @{ Key = "V"; Label = "View Timers"; Icon = "👁️"; Action = { Push-Screen -Screen (Get-TimerManagementScreen) } },
+                @{ Key = "T"; Label = "View Tasks"; Icon = "📅"; Action = { Push-Screen -Screen (Get-TaskManagementScreen) } },
+                @{ Key = "W"; Label = "Week Report"; Icon = "📊"; Action = { Push-Screen -Screen (Get-TimeEntriesListScreen) } }
+            )
+        }
+        
+        Init = {
+            Write-StatusLine -Text " Unified Productivity Suite v5.0 | Use ↑↓/1-6 to navigate, Enter to select, Q to quit"
+        }
+        
+        Render = {
+            param($self)
+            $state = $self.State
+            Render-DashboardHeader
+            Render-StatusCards -Y 10
+            Render-ActivityTimeline -Y 16
+            Render-QuickActions -Y 20 -QuickActions $state.QuickActions
+            Render-MainMenu -Y 26 -Selected $state.SelectedMenuItem -MenuItems $state.MenuItems
+        }
+    
+        HandleInput = {
+            param($self, $Key)
+            $state = $self.State
+            switch ($Key.Key) {
+                ([ConsoleKey]::UpArrow) {
+                    if ($state.SelectedMenuItem -gt 0) { $state.SelectedMenuItem-- }
+                    Request-TuiRefresh; return $true
+                }
+                ([ConsoleKey]::DownArrow) {
+                    if ($state.SelectedMenuItem -lt $state.MenuItems.Count - 1) { $state.SelectedMenuItem++ }
+                    Request-TuiRefresh; return $true
+                }
+                ([ConsoleKey]::Enter) {
+                    & $state.MenuItems[$state.SelectedMenuItem].Action
+                    return $true
+                }
+                ([ConsoleKey]::Escape) { return "Quit" }
+                ([ConsoleKey]::Q) { if (-not $Key.Modifiers) { return "Quit" } }
+                default {
+                    if ($Key.KeyChar) {
+                        $charKey = $Key.KeyChar.ToString().ToUpper()
+                        $menuItem = $state.MenuItems | Where-Object { $_.Key -eq $charKey } | Select-Object -First 1
+                        if ($menuItem) {
+                            $state.SelectedMenuItem = [array]::IndexOf($state.MenuItems, $menuItem)
+                            & $menuItem.Action
+                            return $true
+                        }
+                        $quickAction = $state.QuickActions | Where-Object { $_.Key -eq $charKey } | Select-Object -First 1
+                        if ($quickAction) {
+                            & $quickAction.Action
+                            return $true
+                        }
+                    }
+                }
+            }
+            return $false
+        }
+    }
+    return $screen
+}
+
+#endregion
+
+#region Main Application Entry
+
+function Start-PMCTerminal {
+    Initialize-SystemHandlers
+    Initialize-NotificationSystem
+    Initialize-DialogSystem
+    Initialize-DataEventHandlers
+    Load-UnifiedData
+    
+    $dashboardScreen = Get-DashboardScreen
+    Start-TuiLoop -InitialScreen $dashboardScreen
+}
+
+Clear-Host
+Write-Host "Initializing PMC Terminal..." -ForegroundColor Cyan
+
+try {
+    Start-PMCTerminal
+    Write-Host "`nThank you for using PMC Terminal!" -ForegroundColor Green
+}
+catch {
+    [Console]::Clear()
+    Write-Error "A fatal error occurred in the application."
+    Write-Error "Error: $($_.Exception.Message)"
+    Write-Error "See full details in pmc-error.log"
+    Log-Error -Exception $_.Exception
+    Write-Host "`nPress any key to exit..." -ForegroundColor Yellow
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}
+finally {
+    if ($script:NotificationState.Timer) {
+        $script:NotificationState.Timer.Stop()
+        $script:NotificationState.Timer.Dispose()
+    }
+}
+
+#endregion

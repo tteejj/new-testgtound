@@ -31,7 +31,13 @@ function global:Initialize-TuiEngine {
     )
     
     try {
-        if ($Width -le 0 -or $Height -le 0) { throw "Invalid console dimensions: ${Width}x${Height}" }
+        # Minimum console size requirements
+        $minWidth = 80
+        $minHeight = 24
+        
+        if ($Width -lt $minWidth -or $Height -lt $minHeight) { 
+            throw "Console window too small. Minimum size: ${minWidth}x${minHeight}. Current: ${Width}x${Height}" 
+        }
         
         $script:TuiState.BufferWidth = $Width
         $script:TuiState.BufferHeight = $Height
@@ -210,6 +216,18 @@ function global:Write-BufferBox {
         [ConsoleColor]$BackgroundColor = [ConsoleColor]::Black, 
         [string]$Title = ""
     )
+    
+    # Bounds checking to prevent negative dimensions
+    if ($Width -lt 3 -or $Height -lt 3) { return }
+    if ($X -lt 0 -or $Y -lt 0) { return }
+    if (($X + $Width) -gt $script:TuiState.BufferWidth) { 
+        $Width = $script:TuiState.BufferWidth - $X
+    }
+    if (($Y + $Height) -gt $script:TuiState.BufferHeight) { 
+        $Height = $script:TuiState.BufferHeight - $Y
+    }
+    if ($Width -lt 3 -or $Height -lt 3) { return }
+    
     $borders = Get-BorderChars -Style $BorderStyle
     
     # Top border
@@ -243,18 +261,13 @@ function global:Render-BufferOptimized {
     $lastBG = -1
     
     for ($y = 0; $y -lt $script:TuiState.BufferHeight; $y++) {
+        # Always position cursor at start of line
         $outputBuilder.Append("`e[$($y + 1);1H") | Out-Null
         
         for ($x = 0; $x -lt $script:TuiState.BufferWidth; $x++) {
             $backCell = $script:TuiState.BackBuffer[$y, $x]
-            $frontCell = $script:TuiState.FrontBuffer[$y, $x]
             
-            if ($backCell.Char -eq $frontCell.Char -and 
-                $backCell.FG -eq $frontCell.FG -and 
-                $backCell.BG -eq $frontCell.BG) {
-                continue
-            }
-            
+            # Always render every cell to avoid positioning issues
             if ($backCell.FG -ne $lastFG -or $backCell.BG -ne $lastBG) {
                 $fgCode = Get-AnsiColorCode $backCell.FG
                 $bgCode = Get-AnsiColorCode $backCell.BG -IsBackground $true
@@ -267,6 +280,9 @@ function global:Render-BufferOptimized {
             $script:TuiState.FrontBuffer[$y, $x] = $backCell.Clone()
         }
     }
+    
+    # Reset colors at end
+    $outputBuilder.Append("`e[0m") | Out-Null
     
     [Console]::Write($outputBuilder.ToString())
     
@@ -371,16 +387,30 @@ function global:Process-Input {
 
 function global:Stop-InputHandler { 
     foreach($ps in $script:ResourceCleanup.PowerShells) { 
-        if ($ps -and $script:AsyncResult) {
-            $ps.Stop()
-            $ps.EndInvoke($script:AsyncResult)
-            $ps.Dispose() 
+        if ($ps) {
+            try {
+                $ps.Stop()
+                if ($script:AsyncResult -and -not $script:AsyncResult.IsCompleted) {
+                    try { 
+                        $ps.EndInvoke($script:AsyncResult) 
+                    } catch { 
+                        # Pipeline already stopped, ignore
+                    }
+                }
+            } catch { 
+                # Ignore cleanup errors
+            }
+            try { 
+                $ps.Dispose() 
+            } catch { }
         }
     }
     foreach($rs in $script:ResourceCleanup.Runspaces) { 
         if ($rs) {
-            $rs.Close()
-            $rs.Dispose() 
+            try {
+                $rs.Close()
+                $rs.Dispose() 
+            } catch { }
         }
     } 
 }
