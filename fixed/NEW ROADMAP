@@ -1,0 +1,213 @@
+PMC Terminal v3.0: Strategic Roadmap & Architectural Deep Dive
+Executive Summary
+
+The migration from v2 to the v3.0 architecture has been a resounding success in its primary goal: establishing a modern, robust, and scalable foundation for a Text-based User Interface (TUI) application. The adoption of a discrete TUI Engine, a declarative component model, and an event-driven communication bus are industry-standard best practices that have been implemented with considerable skill. The developer has correctly identified and fixed the most critical flaws of the previous system, such as the Pop-Screen logic bug and the inefficient on-demand instantiation of form elements.
+
+However, the project's rapid functional growth has outpaced the architectural governance established during the initial migration. This has led to a state of incipient architectural decay, characterized by code fragmentation, duplication of logic, and a violation of the core "Separation of Concerns" principle.
+
+This document serves two purposes:
+
+    A Detailed Architectural Blueprint: To provide a granular, "as-built" documentation of the existing systems, their modules, and their public APIs, fulfilling the need to understand what has been created.
+
+    A Corrective Strategic Roadmap (Project Phoenix): To propose a multi-phase plan to consolidate the codebase, enforce architectural consistency, and establish a clear path forward for building out the remaining features on a truly stable foundation.
+
+Following this roadmap will be critical to ensuring the long-term maintainability, stability, and success of the PMC Terminal.
+Part I: In-Depth Architectural State Analysis
+
+This section details the current, post-migration architecture, assuming the proposed file structure consolidation has occurred.
+Layer 1: The Core Systems (/modules/)
+
+This layer contains the foundational, non-visual systems that orchestrate the entire application.
+
+    Purpose: To provide a decoupled, application-wide message bus. This module is the lynchpin of the "Separation of Concerns" principle, allowing different parts of the application to communicate without having direct knowledge of each other. It implements a standard Publish/Subscribe (Pub/Sub) pattern.
+
+    Exported Functions:
+
+        Subscribe-Event: Registers a [scriptblock] handler to listen for a specific, named event. It supports a SubscriberId for targeted unsubscription and a Priority for controlling execution order.
+
+        Unsubscribe-Event: Removes a specific handler from an event's subscription list using its unique SubscriberId.
+
+        Publish-Event: The workhorse of the system. It broadcasts a named event, along with an optional $Data payload, to all registered subscribers for that event.
+
+        Clear-EventSubscriptions: A utility function to remove all subscribers for a given event, or for all events if no name is provided. Used primarily for cleanup or system resets.
+
+        Get-EventSubscriptions: An introspection utility to view the current list of subscribers for debugging purposes.
+
+    Purpose: To manage the entire presentation layer lifecycle. It is responsible for the main application loop, input processing, screen management, and drawing primitives to the console. It cleverly uses a double-buffer system to prevent screen flicker and artifacts.
+
+    Key Concepts:
+
+        Double Buffer: Maintains a FrontBuffer (what is currently on screen) and a BackBuffer (what is about to be drawn). The Render-BufferOptimized function calculates the difference and performs the minimum number of console writes to update the screen.
+
+        Screen Stack: Manages the hierarchy of screens ($script:TuiState.ScreenStack), allowing for intuitive navigation (e.g., a form appearing over a menu, then returning to it).
+
+        Input Handling: Uses a separate, non-blocking runspace to listen for console key presses, placing them in a concurrent queue ($script:TuiState.InputQueue). The main loop processes this queue, ensuring the UI remains responsive.
+
+    Exported Functions:
+
+        Start-TuiLoop: The main entry point for the UI. It initializes the engine, pushes the initial screen, and begins the primary while ($true) loop that processes input and renders changes.
+
+        Request-TuiRefresh: Sets a "dirty flag" ($script:TuiState.IsDirty = $true) that signals to the main loop that a re-render is required on the next cycle. This is the primary way components and screens trigger a visual update.
+
+        Push-Screen: The primary forward navigation function. It places the current screen onto the stack, sets the new screen as active, and calls its Init lifecycle method.
+
+        Pop-Screen: The primary backward navigation function. It calls the current screen's OnExit method, retrieves the previous screen from the stack, sets it as active, and calls its OnResume method.
+
+        Write-BufferString: A low-level primitive for writing a string of characters with specified colors to a coordinate on the BackBuffer.
+
+        Write-BufferBox: A higher-level primitive for drawing bordered boxes (with various styles) to the BackBuffer. Crucially, this now includes bounds checking to prevent crashes from negative dimensions.
+
+        Get-ThemeColor / Set-TuiTheme: API for the theming system.
+
+        Write-StatusLine: A special-case function to write to the very last line of the console, outside the main buffer area.
+
+    Purpose: To abstract all data persistence and business logic. This module is responsible for loading and saving the application's state (pmc-data.json), and providing a clean, event-driven API for all Create, Read, Update, and Delete (CRUD) operations. No other module should ever directly modify the core $script:Data object.
+
+    Exported Functions:
+
+        Load-UnifiedData / Save-UnifiedData: Handles the serialization and deserialization of the application state to/from JSON. Includes backup-on-save logic.
+
+        Initialize-DataEventHandlers: A critical function that subscribes to data-related events (e.g., Data.Create.TimeEntry, Data.Create.Project, Timer.Stop). This is how the UI requests data changes without knowing how they are implemented.
+
+        Get-ActiveProjects, Get-ProjectById, Get-TasksByProject, etc.: A suite of "getter" functions that provide read-only access to the application data in a structured way.
+
+        Add-TimeEntry, Add-Task: Direct-call methods for creating data. While functional, the preferred modern pattern is to use the event-driven handlers (e.g., Publish-Event -EventName "Data.Create.Task").
+
+    Purpose: To provide standardized, modal dialogs (Confirm, Alert, Input) that overlay the current screen. It manages its own stack ($script:DialogState.DialogStack) to handle nested dialogs.
+
+    Key Concepts:
+
+        Render & Input Hijacking: This system subscribes to Screen.Pushed and cleverly wraps the screen's Render and HandleInput methods. This allows it to first draw the screen, then draw the dialog on top, and to intercept all keyboard input while a dialog is active.
+
+    Exported Functions:
+
+        Initialize-DialogSystem: Subscribes to application-level events (Confirm.Request, Alert.Show, Input.Request) and sets up the screen hijacking hooks.
+
+        Show-ConfirmDialog, Show-AlertDialog, Show-InputDialog: High-level factory functions that construct and display specific types of dialogs. They are the primary API for other modules to use. They operate by publishing events that Initialize-DialogSystem has subscribed to.
+
+Layer 2: The Component Library (/components/)
+
+This layer defines the reusable, stateless visual building blocks of the application.
+
+    Purpose: To provide a comprehensive library of UI widgets. The core design principle is that components are "dumb" and stateless. They receive all data and state (like focus, text values, etc.) as properties ($Props) from their parent screen during the render cycle. They handle user input by invoking OnChange or OnClick scriptblock callbacks, which are also passed in as properties.
+
+    Core Components: New-TuiComponent (base), New-TuiForm (container).
+
+    Standard Components: New-TuiLabel, New-TuiButton, New-TuiTextBox, New-TuiDropdown, New-TuiCheckBox, New-TuiProgressBar, New-TuiTextArea.
+
+    Extended/Data-Display Components: New-TuiDatePicker, New-TuiTimePicker, New-TuiTable, New-TuiChart, New-TuiToast, New-TuiDialog.
+
+Layer 3: The UI Screens (/screens/)
+
+This layer represents the "smart" containers. Screens hold state, manage data by communicating with the Data Layer via events, and compose components to build a user interface. Each screen is a self-contained module.
+
+    dashboard-screen.psm1: Main application entry point.
+
+    project-management-screen.psm1: Lists, creates, and modifies projects.
+
+    task-management-screen.psm1: Lists, creates, and modifies tasks.
+
+    time-tracking-menu-screen.psm1: Sub-menu for all time-related actions.
+
+    time-entry-form-screen.psm1: A classic data-entry form.
+
+    time-entries-list-screen.psm1: A list/details view with filtering.
+
+    timer-management-screen.psm1: Manages multiple concurrent timers.
+
+    reports-screen.psm1: A menu leading to various data-visualization reports.
+
+    settings-screen.psm1: UI for configuring the application.
+
+Part II: Identification of Critical Architectural Inconsistencies
+
+The rapid development has introduced several significant inconsistencies that undermine the new architecture's goals.
+
+    CRITICAL: Violation of Single Source of Truth (SSoT)
+
+        Problem: Two separate modules contain logic to handle the Timer.Stop event and create a TimeEntry record.
+
+        Evidence A (data-manager.txt:Initialize-DataEventHandlers): Subscribes to Timer.Stop and correctly creates a time entry, saves the unified data file, and publishes a success notification. This is the correct implementation.
+
+        Evidence B (main.txt): Also subscribes to Timer.Stop and contains a separate, slightly different implementation to create a time entry and save the data.
+
+        Impact: This is the most severe architectural flaw. It creates a race condition where two pieces of code are attempting to modify the same data structure and write to the same file. It will lead to data loss, corruption, and unpredictable behavior. It completely breaks the "Separation of Concerns" principle.
+
+    SEVERE: Code Fragmentation and Redundancy
+
+        Problem: The codebase is illogically fragmented, leading to confusion and duplicate definitions.
+
+        Evidence A: tui-components.txt and tui-components-extended.txt. There is no logical reason to separate these. A component library should be unified.
+
+        Evidence B: placeholder-screens.txt is now entirely obsolete. Full, feature-rich implementations exist in other files (reports-screen.txt, settings-screen.txt), yet the old, conflicting placeholder functions still exist in the codebase. This creates ambiguity about which function main.ps1 will actually import and use.
+
+        Impact: This makes the codebase difficult to navigate and maintain. A developer fixing a bug in Get-ReportsMenuScreen might edit the placeholder version, having no effect on the running application, leading to wasted time and frustration.
+
+    MODERATE: Inconsistent Event-Driven Patterns
+
+        Problem: The pattern for creating new data entities is not applied consistently.
+
+        Evidence A (Correct): time-entry-form-screen.psm1 correctly fires a Data.Create.TimeEntry event. The UI knows nothing about how the data is created; it just makes a request.
+
+        Evidence B (Incorrect): timer-management-screen.txt (specifically Get-StartTimerScreen) directly manipulates the $script:Data.ActiveTimers hashtable and calls Save-UnifiedData.
+
+        Impact: This violates the SSoT principle at a micro level. The screen has taken on the responsibilities of the data manager. All data mutation logic must be centralized in data-manager.psm1's event handlers to ensure validation, consistency, and proper data saving.
+
+    MINOR: Outdated Documentation and Ambiguous File Structure
+
+        Problem: The MIGRATION-STATUS.md and FIXES-APPLIED.md files, while useful during the migration, are now dangerously out of date. The flat file structure with .txt extensions gives no indication of a file's purpose (module, component, or screen).
+
+        Impact: This significantly increases the cognitive load for anyone working on the project. It's impossible to tell the current state or find the relevant code without reading through multiple, conflicting files.
+
+Part III: The New Strategic Roadmap: "Project Phoenix"
+
+This roadmap will guide the consolidation and stabilization of the v3.0 architecture, rising from the ashes of the fragmented codebase.
+Phase 1: Consolidation & Unification (Immediate Action Required)
+
+    Objective: To create a single, logical, and unambiguous codebase by restructuring files and eliminating redundancy.
+
+    Action Items:
+
+        Establish New Directory Structure: Create the /modules/, /components/, and /screens/ subdirectories as detailed in Part I.
+
+        Unify Component Library: Merge the complete contents of tui-components.txt and tui-components-extended.txt into a single file: /components/tui-components.psm1.
+
+        Relocate Core Modules: Move the .txt files for event-system, tui-engine-v2, data-manager, and dialog-system into /modules/ and rename them with the .psm1 extension.
+
+        Relocate Screens: Move the .txt files for all feature-complete screens (dashboard-screen, project-management-screen, etc.) into /screens/ and rename them with the .psm1 extension.
+
+        Purge Obsolete Code: Delete placeholder-screens.txt and test-dashboard-minimal.txt. Their functionality is now superseded.
+
+        Update main.ps1: Modify the module import section to reflect the new, organized directory structure.
+
+Phase 2: Architectural Enforcement (Critical Fixes)
+
+    Objective: To correct the violations of core architectural principles, ensuring stability and maintainability.
+
+    Action Items:
+
+        Eliminate SSoT Violation:
+
+            In main.ps1, delete the entire Subscribe-Event -EventName "Timer.Stop" block. The data-manager is the sole authority on this event. This is a one-line fix with a massive positive impact.
+
+        Refactor Timer Creation Logic:
+
+            In timer-management-screen.psm1, locate the OnClick handler for the "Start Timer" button within the Get-StartTimerScreen function.
+
+            Remove the logic that directly modifies $script:Data.ActiveTimers.
+
+            Replace it with: Publish-Event -EventName "Data.Create.Timer" -Data @{ ProjectKey = ...; Description = ... }.
+
+            In data-manager.psm1, add a new handler inside Initialize-DataEventHandlers for the "Data.Create.Timer" event. This handler will contain the logic to generate a timer key, create the timer object, add it to $script:Data.ActiveTimers, and call Save-UnifiedData.
+
+Phase 3: Foundational Enhancements (Future-Proofing)
+
+    Objective: To refine the core systems for better clarity and robustness.
+
+    Action Items:
+
+        Formalize Event Contracts: Create a EVENTS.md file that documents every event name in the system, its purpose, and the expected structure of its $Data payload. This turns implicit knowledge into explicit documentation.
+
+        Refine Dialog System Integration: While the current dialog system works, consider modifying the Start-TuiLoop's main loop. Instead of the screen wrapper, the loop itself could check if ($script:DialogState.CurrentDialog), pass input to it, and render it after the main screen. This makes the modal nature of dialogs more explicit in the application's core logic.
+
+        Introduce Global State Object: To reduce excessive parameter passing, consider creating a single, global $PmcState object in main.ps1 that can be passed down or accessed by modules. This object would hold references to $script:TuiState, $script:Data, etc., providing a single, clean entry point to the application's state.
