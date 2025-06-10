@@ -49,6 +49,9 @@ function global:Initialize-TuiEngine {
         [Console]::CursorVisible = $false
         [Console]::Clear()
         
+        # Make TuiState globally accessible
+        $global:TuiState = $script:TuiState
+        
         Initialize-InputHandler
         
         Publish-Event -EventName "System.EngineInitialized" -Data @{ Width = $Width; Height = $Height }
@@ -129,6 +132,11 @@ function global:Request-TuiRefresh {
 }
 
 function global:Restore-TuiState {
+    Cleanup-TuiEngine
+}
+
+function global:Stop-TuiEngine {
+    $script:TuiState.Running = $false
     Cleanup-TuiEngine
 }
 
@@ -377,17 +385,8 @@ function global:Stop-InputHandler {
 function global:Get-BorderChars { 
     param([string]$Style) 
     
-    # Use theme manager if available
-    if (Get-Command -Name "Get-BorderCharacter" -ErrorAction SilentlyContinue) {
-        return @{
-            TopLeft = Get-BorderCharacter "TopLeft"
-            TopRight = Get-BorderCharacter "TopRight"
-            BottomLeft = Get-BorderCharacter "BottomLeft"
-            BottomRight = Get-BorderCharacter "BottomRight"
-            Horizontal = Get-BorderCharacter "Horizontal"
-            Vertical = Get-BorderCharacter "Vertical"
-        }
-    }
+    # Theme-based borders (if theme manager provides border styles)
+    # For now, use the built-in styles
     
     # Fallback to built-in styles
     $styles = @{ 
@@ -449,5 +448,6 @@ Export-ModuleMember -Function @(
     'Write-BufferBox', 
     'Clear-BackBuffer',
     'Write-StatusLine',
-    'Get-BorderChars'
+    'Get-BorderChars',
+    'Stop-TuiEngine'
 ) -Variable @('TuiState')

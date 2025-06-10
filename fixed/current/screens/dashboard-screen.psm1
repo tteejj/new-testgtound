@@ -1,6 +1,8 @@
-# Dashboard Screen Module - Central hub for PMC Terminal
+# File: dashboard-screen.psm1 (SIMPLIFIED FIXED LAYOUT)
+# Simplified dashboard with better spacing and no overlapping
 
 function global:Get-DashboardScreen {
+    
     $dashboardScreen = @{
         Name = "DashboardScreen"
         State = @{
@@ -13,61 +15,42 @@ function global:Get-DashboardScreen {
         
         Init = {
             param($self)
-            # Subscribe to data events for real-time updates
-            Subscribe-Event -EventName "Data.Timer.Started" -Handler {
-                $self.RefreshActiveTimers()
-                Request-TuiRefresh
-            }
-            Subscribe-Event -EventName "Data.Timer.Stopped" -Handler {
-                $self.RefreshActiveTimers()
-                Request-TuiRefresh
-            }
-            Subscribe-Event -EventName "Data.TimeEntry.Created" -Handler {
-                $self.RefreshRecentEntries()
-                Request-TuiRefresh
-            }
-            $self.RefreshAllData()
+            & $self.RefreshAllData -self $self
         }
         
         Render = {
             param($self)
             
-            # Header with current time and active timer indicator
-            $headerY = 2
-            Write-BufferString -X 2 -Y $headerY -Text "PMC Terminal - $(Get-Date -Format 'dddd, MMMM dd, yyyy HH:mm')" -ForegroundColor (Get-ThemeColor "Header")
+            # Header
+            Write-BufferString -X 2 -Y 1 -Text "PMC Terminal - $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -ForegroundColor "Cyan"
             
+            # Timer indicator
             if ($self.State.ActiveTimers.Count -gt 0) {
-                $timerText = "🔴 TIMER ACTIVE"
-                Write-BufferString -X ($script:TuiState.BufferWidth - $timerText.Length - 2) -Y $headerY -Text $timerText -ForegroundColor "Red"
+                Write-BufferString -X 60 -Y 1 -Text "[TIMER ACTIVE]" -ForegroundColor "Red"
             }
             
-            # Three-column layout
-            $leftCol = 2
-            $middleCol = 30
-            $rightCol = 58
-            $contentY = 4
+            # Quick Actions (Left)
+            Write-BufferBox -X 2 -Y 3 -Width 25 -Height 10 -Title " Quick Actions " -BorderColor "Yellow"
+            & $self.RenderQuickActions -self $self -x 4 -y 5
             
-            # Left Column: Quick Actions
-            Write-BufferBox -X $leftCol -Y $contentY -Width 26 -Height 15 -Title " Quick Actions " -BorderColor (Get-ThemeColor "Accent")
-            $self.RenderQuickActions($leftCol + 2, $contentY + 2)
+            # Quick Stats (Center)
+            Write-BufferBox -X 30 -Y 3 -Width 25 -Height 10 -Title " Quick Stats " -BorderColor "Green"
+            & $self.RenderQuickStats -self $self -x 32 -y 5
             
-            # Middle Column: Active Timers & Today's Tasks
-            Write-BufferBox -X $middleCol -Y $contentY -Width 26 -Height 8 -Title " Active Timers " -BorderColor (Get-ThemeColor "Info")
-            $self.RenderActiveTimers($middleCol + 2, $contentY + 2)
+            # Active Timers (Right)
+            Write-BufferBox -X 58 -Y 3 -Width 25 -Height 10 -Title " Active Timers " -BorderColor "Cyan"
+            & $self.RenderActiveTimers -self $self -x 60 -y 5
             
-            Write-BufferBox -X $middleCol -Y ($contentY + 9) -Width 26 -Height 7 -Title " Today's Tasks " -BorderColor (Get-ThemeColor "Warning")
-            $self.RenderTodaysTasks($middleCol + 2, $contentY + 11)
+            # Recent Entries (Bottom Left)
+            Write-BufferBox -X 2 -Y 14 -Width 40 -Height 8 -Title " Recent Time Entries " -BorderColor "Blue"
+            & $self.RenderRecentEntries -self $self -x 4 -y 16
             
-            # Right Column: Recent Entries & Stats
-            Write-BufferBox -X $rightCol -Y $contentY -Width 30 -Height 10 -Title " Recent Time Entries " -BorderColor (Get-ThemeColor "Success")
-            $self.RenderRecentEntries($rightCol + 2, $contentY + 2)
-            
-            Write-BufferBox -X $rightCol -Y ($contentY + 11) -Width 30 -Height 5 -Title " Quick Stats " -BorderColor (Get-ThemeColor "Accent")
-            $self.RenderQuickStats($rightCol + 2, $contentY + 13)
+            # Today's Tasks (Bottom Right)
+            Write-BufferBox -X 44 -Y 14 -Width 39 -Height 8 -Title " Today's Tasks " -BorderColor "Magenta"
+            & $self.RenderTodaysTasks -self $self -x 46 -y 16
             
             # Status bar
-            $statusY = $script:TuiState.BufferHeight - 2
-            Write-BufferString -X 2 -Y $statusY -Text "Navigation: ↑↓ Select • Enter: Execute • Tab: Switch Sections • P: Command Palette • Q: Quit" -ForegroundColor (Get-ThemeColor "Subtle")
+            Write-BufferString -X 2 -Y 23 -Text "Use arrows to select, Enter to execute, Q to quit" -ForegroundColor "Gray"
         }
         
         HandleInput = {
@@ -75,191 +58,208 @@ function global:Get-DashboardScreen {
             switch ($Key.Key) {
                 ([ConsoleKey]::UpArrow) { 
                     $self.State.SelectedQuickAction = [Math]::Max(0, $self.State.SelectedQuickAction - 1)
+                    Request-TuiRefresh
                     return $true 
                 }
                 ([ConsoleKey]::DownArrow) { 
-                    $maxActions = $self.GetQuickActions().Count - 1
+                    $maxActions = (& $self.GetQuickActions -self $self).Count - 1
                     $self.State.SelectedQuickAction = [Math]::Min($maxActions, $self.State.SelectedQuickAction + 1)
+                    Request-TuiRefresh
                     return $true 
                 }
-                ([ConsoleKey]::Enter) {
-                    $selectedAction = $self.GetQuickActions()[$self.State.SelectedQuickAction]
-                    & $selectedAction.Action
-                    return $true
-                }
-                ([ConsoleKey]::P) {
-                    if (Get-Command -Name "Get-CommandPaletteScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-CommandPaletteScreen)
+                ([ConsoleKey]::Enter) { 
+                    $selectedAction = (& $self.GetQuickActions -self $self)[$self.State.SelectedQuickAction]
+                    if ($selectedAction -and $selectedAction.Action) {
+                        & $selectedAction.Action
                     }
-                    return $true
+                    return $true 
                 }
                 ([ConsoleKey]::Q) { return "Quit" }
             }
             return $false
         }
         
-        # Helper methods for data management
-        RefreshActiveTimers = {
-            $this.State.ActiveTimers = @($script:Data.ActiveTimers.GetEnumerator())
+        RefreshAllData = { 
+            param($self)
+            & $self.RefreshActiveTimers -self $self
+            & $self.RefreshTodaysTasks -self $self
+            & $self.RefreshRecentEntries -self $self
+            & $self.RefreshQuickStats -self $self
         }
         
-        RefreshTodaysTasks = {
-            $today = (Get-Date).ToString("yyyy-MM-dd")
-            $this.State.TodaysTasks = @($script:Data.Tasks | Where-Object { 
-                (-not $_.Completed) -and (
-                    [string]::IsNullOrEmpty($_.DueDate) -or $_.DueDate -eq $today
-                )
-            } | Sort-Object Priority, DueDate | Select-Object -First 5)
-        }
-        
-        RefreshRecentEntries = {
-            $this.State.RecentEntries = @($script:Data.TimeEntries | 
-                Sort-Object Date, EnteredAt -Descending | 
-                Select-Object -First 5)
-        }
-        
-        RefreshQuickStats = {
-            $today = (Get-Date).ToString("yyyy-MM-dd")
-            $todayEntries = $script:Data.TimeEntries | Where-Object { $_.Date -eq $today }
-            $this.State.QuickStats = @{
-                TodayHours = ($todayEntries | Measure-Object -Property Hours -Sum).Sum
-                ActiveTasks = ($script:Data.Tasks | Where-Object { -not $_.Completed }).Count
-                ActiveProjects = ($script:Data.Projects.Keys).Count
-                RunningTimers = $script:Data.ActiveTimers.Count
+        RefreshActiveTimers = { 
+            param($self)
+            if ($global:Data -and $global:Data.ActiveTimers) {
+                $self.State.ActiveTimers = @($global:Data.ActiveTimers.GetEnumerator() | Select-Object -First 5)
+            } else {
+                $self.State.ActiveTimers = @()
             }
         }
         
-        RefreshAllData = {
-            $this.RefreshActiveTimers()
-            $this.RefreshTodaysTasks() 
-            $this.RefreshRecentEntries()
-            $this.RefreshQuickStats()
+        RefreshTodaysTasks = { 
+            param($self)
+            if ($global:Data -and $global:Data.Tasks) {
+                $today = (Get-Date).ToString("yyyy-MM-dd")
+                $self.State.TodaysTasks = @($global:Data.Tasks | Where-Object { 
+                    (-not $_.Completed) -and ($_.DueDate -eq $today -or [string]::IsNullOrEmpty($_.DueDate))
+                } | Select-Object -First 5)
+            } else {
+                $self.State.TodaysTasks = @()
+            }
         }
         
-        GetQuickActions = {
-            return @(
-                @{ Name = "📝 Add Time Entry"; Action = { 
-                    if (Get-Command -Name "Get-TimeEntryFormScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-TimeEntryFormScreen) 
+        RefreshRecentEntries = { 
+            param($self)
+            if ($global:Data -and $global:Data.TimeEntries) {
+                $self.State.RecentEntries = @($global:Data.TimeEntries | Select-Object -Last 5)
+            } else {
+                $self.State.RecentEntries = @()
+            }
+        }
+        
+        RefreshQuickStats = { 
+            param($self)
+            $today = (Get-Date).ToString("yyyy-MM-dd")
+            
+            if ($global:Data -and $global:Data.TimeEntries) {
+                $todayEntries = @($global:Data.TimeEntries | Where-Object { $_.Date -eq $today })
+                $todayHours = ($todayEntries | Measure-Object -Property Hours -Sum).Sum
+                
+                $self.State.QuickStats = @{ 
+                    TodayHours = if ($todayHours) { $todayHours } else { 0 }
+                    ActiveTasks = if ($global:Data.Tasks) { @($global:Data.Tasks | Where-Object { -not $_.Completed }).Count } else { 0 }
+                    RunningTimers = if ($global:Data.ActiveTimers) { $global:Data.ActiveTimers.Count } else { 0 }
+                }
+            } else {
+                $self.State.QuickStats = @{ TodayHours = 0; ActiveTasks = 0; RunningTimers = 0 }
+            }
+        }
+        
+        GetQuickActions = { 
+            param($self)
+            return @( 
+                @{ Name = "Add Time Entry"; Action = { 
+                    if (Get-Command -Name "Get-TimeEntryScreen" -ErrorAction SilentlyContinue) {
+                        Push-Screen -Screen (Get-TimeEntryScreen)
                     }
                 }}
-                @{ Name = "⏱️  Start Timer"; Action = { 
+                @{ Name = "Start Timer"; Action = { 
                     if (Get-Command -Name "Get-TimerStartScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-TimerStartScreen) 
+                        Push-Screen -Screen (Get-TimerStartScreen)
                     }
                 }}
-                @{ Name = "📋 Add Task"; Action = { 
-                    if (Get-Command -Name "Get-TaskFormScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-TaskFormScreen) 
+                @{ Name = "Manage Tasks"; Action = { 
+                    if (Get-Command -Name "Get-TaskManagementScreen" -ErrorAction SilentlyContinue) {
+                        Push-Screen -Screen (Get-TaskManagementScreen)
                     }
                 }}
-                @{ Name = "🏗️  Manage Projects"; Action = { 
-                    if (Get-Command -Name "Get-ProjectManagementScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-ProjectManagementScreen) 
+                @{ Name = "View Reports"; Action = { 
+                    if (Get-Command -Name "Get-ReportsScreen" -ErrorAction SilentlyContinue) {
+                        Push-Screen -Screen (Get-ReportsScreen)
                     }
                 }}
-                @{ Name = "📊 Reports"; Action = { 
-                    if (Get-Command -Name "Get-ReportsMenuScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-ReportsMenuScreen) 
-                    }
-                }}
-                @{ Name = "📁 File Browser"; Action = { 
-                    if (Get-Command -Name "Start-TerminalFileBrowser" -ErrorAction SilentlyContinue) {
-                        Start-TerminalFileBrowser 
-                    }
-                }}
-                @{ Name = "🎨 Settings"; Action = { 
+                @{ Name = "Settings"; Action = { 
                     if (Get-Command -Name "Get-SettingsScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-SettingsScreen) 
+                        Push-Screen -Screen (Get-SettingsScreen)
                     }
                 }}
             )
         }
         
-        RenderQuickActions = {
-            param($x, $y)
-            $actions = $this.GetQuickActions()
-            for ($i = 0; $i -lt $actions.Count; $i++) {
-                $isSelected = ($i -eq $this.State.SelectedQuickAction)
-                $prefix = if ($isSelected) { "→ " } else { "  " }
-                $color = if ($isSelected) { Get-ThemeColor "Warning" } else { Get-ThemeColor "Primary" }
+        RenderQuickActions = { 
+            param($self, $x, $y)
+            $actions = & $self.GetQuickActions -self $self
+            for ($i = 0; $i -lt $actions.Count; $i++) { 
+                $isSelected = ($i -eq $self.State.SelectedQuickAction)
+                $prefix = if ($isSelected) { "> " } else { "  " }
+                $color = if ($isSelected) { "Yellow" } else { "White" }
                 Write-BufferString -X $x -Y ($y + $i) -Text "$prefix$($actions[$i].Name)" -ForegroundColor $color
             }
         }
         
-        RenderActiveTimers = {
-            param($x, $y)
-            if ($this.State.ActiveTimers.Count -eq 0) {
-                Write-BufferString -X $x -Y $y -Text "No active timers" -ForegroundColor (Get-ThemeColor "Subtle")
-            } else {
+        RenderActiveTimers = { 
+            param($self, $x, $y)
+            if ($self.State.ActiveTimers.Count -eq 0) { 
+                Write-BufferString -X $x -Y $y -Text "No active timers" -ForegroundColor "Gray"
+            } else { 
                 $currentY = $y
-                foreach ($timer in $this.State.ActiveTimers) {
-                    $elapsed = (Get-Date) - [DateTime]$timer.Value.StartTime
-                    $project = Get-ProjectOrTemplate $timer.Value.ProjectKey
-                    if ($project) {
-                        Write-BufferString -X $x -Y $currentY -Text "$($project.Name)" -ForegroundColor (Get-ThemeColor "Info")
-                    } else {
-                        Write-BufferString -X $x -Y $currentY -Text "Unknown Project" -ForegroundColor (Get-ThemeColor "Error")
+                foreach ($timer in $self.State.ActiveTimers) { 
+                    if ($timer.Value -and $timer.Value.StartTime) {
+                        $elapsed = (Get-Date) - [DateTime]$timer.Value.StartTime
+                        $hours = [Math]::Floor($elapsed.TotalHours)
+                        $mins = $elapsed.Minutes
+                        $timeText = "{0}h {1}m" -f $hours, $mins
+                        Write-BufferString -X $x -Y $currentY -Text $timeText -ForegroundColor "Cyan"
+                        $currentY++
                     }
-                    Write-BufferString -X $x -Y ($currentY + 1) -Text "  $([Math]::Floor($elapsed.TotalHours)):$($elapsed.ToString('mm\:ss'))" -ForegroundColor (Get-ThemeColor "Accent")
-                    $currentY += 2
-                    if ($currentY -ge ($y + 5)) { break }  # Limit display
-                }
+                } 
             }
         }
         
-        RenderTodaysTasks = {
-            param($x, $y)
-            if ($this.State.TodaysTasks.Count -eq 0) {
-                Write-BufferString -X $x -Y $y -Text "No tasks for today" -ForegroundColor (Get-ThemeColor "Subtle")
-            } else {
+        RenderTodaysTasks = { 
+            param($self, $x, $y)
+            if ($self.State.TodaysTasks.Count -eq 0) { 
+                Write-BufferString -X $x -Y $y -Text "No tasks for today" -ForegroundColor "Gray"
+            } else { 
                 $currentY = $y
-                foreach ($task in $this.State.TodaysTasks) {
-                    $priority = switch ($task.Priority) {
-                        "Critical" { "🔥" }
-                        "High" { "🔴" }
-                        "Medium" { "🟡" }
-                        "Low" { "🟢" }
-                        default { "⚪" }
+                foreach ($task in $self.State.TodaysTasks) { 
+                    $taskText = "- " + $task.Description
+                    if ($taskText.Length -gt 35) { 
+                        $taskText = $taskText.Substring(0, 32) + "..."
                     }
-                    $taskText = "$priority $($task.Description)"
-                    if ($taskText.Length -gt 22) { $taskText = $taskText.Substring(0, 19) + "..." }
-                    Write-BufferString -X $x -Y $currentY -Text $taskText -ForegroundColor (Get-ThemeColor "Primary")
-                    $currentY++
-                    if ($currentY -ge ($y + 4)) { break }  # Limit display
-                }
+                    Write-BufferString -X $x -Y $currentY -Text $taskText -ForegroundColor "White"
+                    $currentY++ 
+                } 
             }
         }
         
-        RenderRecentEntries = {
-            param($x, $y)
-            if ($this.State.RecentEntries.Count -eq 0) {
-                Write-BufferString -X $x -Y $y -Text "No recent entries" -ForegroundColor (Get-ThemeColor "Subtle")
-            } else {
+        RenderRecentEntries = { 
+            param($self, $x, $y)
+            if ($self.State.RecentEntries.Count -eq 0) { 
+                Write-BufferString -X $x -Y $y -Text "No recent entries" -ForegroundColor "Gray"
+            } else { 
                 $currentY = $y
-                foreach ($entry in $this.State.RecentEntries) {
-                    $project = Get-ProjectOrTemplate $entry.ProjectKey
-                    $entryText = "$($entry.Date): $($entry.Hours)h"
-                    Write-BufferString -X $x -Y $currentY -Text $entryText -ForegroundColor (Get-ThemeColor "Success")
-                    if ($project) {
-                        Write-BufferString -X ($x + 2) -Y ($currentY + 1) -Text $project.Name -ForegroundColor (Get-ThemeColor "Subtle")
+                foreach ($entry in $self.State.RecentEntries) {
+                    if ($entry.Hours -and $entry.Date) {
+                        $entryText = "$($entry.Date): $($entry.Hours)h"
+                        if ($entry.Description) {
+                            $desc = $entry.Description
+                            if ($desc.Length -gt 20) { $desc = $desc.Substring(0, 17) + "..." }
+                            $entryText += " - $desc"
+                        }
+                        if ($entryText.Length -gt 36) {
+                            $entryText = $entryText.Substring(0, 33) + "..."
+                        }
+                        Write-BufferString -X $x -Y $currentY -Text $entryText -ForegroundColor "White"
+                        $currentY++
                     }
-                    $currentY += 2
-                    if ($currentY -ge ($y + 7)) { break }  # Limit display
-                }
+                } 
             }
         }
         
-        RenderQuickStats = {
-            param($x, $y)
-            $stats = $this.State.QuickStats
-            Write-BufferString -X $x -Y $y -Text "Today: $($stats.TodayHours)h" -ForegroundColor (Get-ThemeColor "Info")
-            Write-BufferString -X $x -Y ($y + 1) -Text "Active: $($stats.ActiveTasks) tasks, $($stats.RunningTimers) timers" -ForegroundColor (Get-ThemeColor "Warning")
+        RenderQuickStats = { 
+            param($self, $x, $y)
+            $stats = $self.State.QuickStats
+            Write-BufferString -X $x -Y $y -Text "Today's Hours:" -ForegroundColor "Gray"
+            Write-BufferString -X $x -Y ($y + 1) -Text "$($stats.TodayHours)h" -ForegroundColor "Green"
+            
+            Write-BufferString -X $x -Y ($y + 3) -Text "Active Tasks:" -ForegroundColor "Gray"
+            Write-BufferString -X $x -Y ($y + 4) -Text "$($stats.ActiveTasks)" -ForegroundColor "Yellow"
+            
+            Write-BufferString -X $x -Y ($y + 6) -Text "Running Timers:" -ForegroundColor "Gray"
+            Write-BufferString -X $x -Y ($y + 7) -Text "$($stats.RunningTimers)" -ForegroundColor "Cyan"
         }
     }
     
-    return $dashboardScreen
+    return [PSCustomObject]$dashboardScreen
 }
 
-# Export module members
-Export-ModuleMember -Function 'Get-DashboardScreen'
+# Helper function for getting week start
+function Get-WeekStart {
+    param([DateTime]$Date = (Get-Date))
+    $dayOfWeek = $Date.DayOfWeek
+    $daysToSubtract = if ($dayOfWeek -eq [DayOfWeek]::Sunday) { 6 } else { [int]$dayOfWeek - 1 }
+    return $Date.Date.AddDays(-$daysToSubtract)
+}
+
+Export-ModuleMember -Function 'Get-DashboardScreen', 'Get-WeekStart'

@@ -11,7 +11,7 @@ function Get-SettingsScreen {
             )
             SelectedCategory = 0
             SelectedItem = 0
-            CurrentTheme = $script:TuiState.CurrentTheme
+            CurrentTheme = Get-TuiTheme
         }
         
         Render = {

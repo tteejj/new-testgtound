@@ -1,5 +1,5 @@
-# Rock-Solid TUI Engine v2.2 - Framework Edition (Updated for v3.0)
-# Manages the main loop, rendering pipeline, input queue, and integrates with new modular system
+# Rock-Solid TUI Engine v3.0 - Restored with Architectural Upgrades
+# Full restoration of OG functionality plus component system and layout management
 
 #region Core TUI State
 $script:TuiState = @{
@@ -8,7 +8,6 @@ $script:TuiState = @{
     BufferHeight    = 0
     FrontBuffer     = $null
     BackBuffer      = $null
-    Buffer          = $null  # Alias for compatibility
     InputQueue      = [System.Collections.Concurrent.ConcurrentQueue[object]]::new()
     InputQueueMaxSize = 100
     ScreenStack     = [System.Collections.Stack]::new()
@@ -17,6 +16,9 @@ $script:TuiState = @{
     LastActivity    = [DateTime]::Now
     LastRenderTime  = [DateTime]::MinValue
     RenderStats     = @{ LastFrameTime = 0; FrameCount = 0; TotalTime = 0 }
+    Components      = @()  # Component registry
+    Layouts         = @{}  # Layout engines
+    FocusedComponent = $null
 }
 $script:ResourceCleanup = @{ Runspaces = @(); PowerShells = @() }
 #endregion
@@ -36,8 +38,8 @@ function global:Initialize-TuiEngine {
         $script:TuiState.BufferHeight = $Height
         $script:TuiState.FrontBuffer = New-Object 'object[,]' $Height, $Width
         $script:TuiState.BackBuffer = New-Object 'object[,]' $Height, $Width
-        $script:TuiState.Buffer = $script:TuiState.BackBuffer  # Alias for compatibility
         
+        # Initialize buffers with empty cells
         for ($y = 0; $y -lt $Height; $y++) {
             for ($x = 0; $x -lt $Width; $x++) {
                 $emptyCell = @{ Char = ' '; FG = [ConsoleColor]::White; BG = [ConsoleColor]::Black }
@@ -49,9 +51,26 @@ function global:Initialize-TuiEngine {
         [Console]::CursorVisible = $false
         [Console]::Clear()
         
+        # Initialize subsystems
+        Initialize-LayoutEngines
+        Initialize-ComponentSystem
         Initialize-InputHandler
         
-        Publish-Event -EventName "System.EngineInitialized" -Data @{ Width = $Width; Height = $Height }
+        # Initialize external modules if available
+        if (Get-Command -Name "Initialize-ThemeManager" -ErrorAction SilentlyContinue) {
+            Initialize-ThemeManager
+        }
+        if (Get-Command -Name "Initialize-EventSystem" -ErrorAction SilentlyContinue) {
+            Initialize-EventSystem
+        }
+        
+        # Publish initialization event
+        if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
+            Publish-Event -EventName "System.EngineInitialized" -Data @{ Width = $Width; Height = $Height }
+        }
+        
+        # Export TuiState for global access
+        $global:TuiState = $script:TuiState
     }
     catch {
         Write-Host "FATAL: Failed to initialize TUI Engine: $_" -ForegroundColor Red
@@ -63,43 +82,63 @@ function global:Start-TuiLoop {
     param([hashtable]$InitialScreen)
 
     try {
+        Initialize-TuiEngine
+        
         if ($InitialScreen) {
             Push-Screen -Screen $InitialScreen
         }
 
         $script:TuiState.Running = $true
         while ($script:TuiState.Running) {
-            # Process input
+            # Process input queue
             $key = Process-Input
             while ($key) {
                 $script:TuiState.LastActivity = [DateTime]::Now
                 
-                # Check if dialog system handles the input first
+                # Dialog system gets first chance at input
                 $dialogHandled = $false
                 if (Get-Command -Name "Handle-DialogInput" -ErrorAction SilentlyContinue) {
                     $dialogHandled = Handle-DialogInput -Key $key
                 }
                 
-                # If dialog didn't handle it, pass to current screen
-                if (-not $dialogHandled -and $script:TuiState.CurrentScreen -and $script:TuiState.CurrentScreen.HandleInput) {
-                    $result = & $script:TuiState.CurrentScreen.HandleInput -self $script:TuiState.CurrentScreen -Key $key
-                    switch ($result) {
-                        "Back" { Pop-Screen }
-                        "Quit" { $script:TuiState.Running = $false }
+                # If not handled by dialog, pass to current screen/component
+                if (-not $dialogHandled) {
+                    # Component focus handling
+                    if ($script:TuiState.FocusedComponent -and $script:TuiState.FocusedComponent.HandleInput) {
+                        $componentResult = & $script:TuiState.FocusedComponent.HandleInput -self $script:TuiState.FocusedComponent -Key $key
+                        if ($componentResult -eq $true) {
+                            $key = Process-Input
+                            continue
+                        }
+                    }
+                    
+                    # Screen handling
+                    if ($script:TuiState.CurrentScreen -and $script:TuiState.CurrentScreen.HandleInput) {
+                        $result = & $script:TuiState.CurrentScreen.HandleInput -self $script:TuiState.CurrentScreen -Key $key
+                        switch ($result) {
+                            "Back" { Pop-Screen }
+                            "Quit" { $script:TuiState.Running = $false }
+                        }
                     }
                 }
                 
                 $key = Process-Input
             }
             
-            # Update dialog system (remove expired toasts)
+            # Update dialog system if available
             if (Get-Command -Name "Update-DialogSystem" -ErrorAction SilentlyContinue) {
                 Update-DialogSystem
             }
 
-            # Render if needed
+            # Render if dirty
             if ($script:TuiState.IsDirty) {
-                Clear-BackBuffer -BackgroundColor (Get-ThemeColor "Background")
+                $bgColor = if (Get-Command -Name "Get-ThemeColor" -ErrorAction SilentlyContinue) {
+                    Get-ThemeColor "Background"
+                } else {
+                    [ConsoleColor]::Black
+                }
+                
+                Clear-BackBuffer -BackgroundColor $bgColor
                 
                 # Render current screen
                 if ($script:TuiState.CurrentScreen -and $script:TuiState.CurrentScreen.Render) {
@@ -111,10 +150,12 @@ function global:Start-TuiLoop {
                     Render-Dialogs
                 }
                 
+                # Perform optimized render
                 Render-BufferOptimized
                 $script:TuiState.IsDirty = $false
             }
             
+            # Adaptive sleep based on activity
             $sleepTime = if (([DateTime]::Now - $script:TuiState.LastActivity).TotalSeconds -lt 2) { 16 } else { 100 }
             Start-Sleep -Milliseconds $sleepTime
         }
@@ -128,16 +169,17 @@ function global:Request-TuiRefresh {
     $script:TuiState.IsDirty = $true
 }
 
-function global:Restore-TuiState {
-    Cleanup-TuiEngine
-}
-
 function Cleanup-TuiEngine {
     try {
         Stop-InputHandler
         [Console]::CursorVisible = $true
         [Console]::Clear()
         [Console]::ResetColor()
+        
+        # Publish cleanup event
+        if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
+            Publish-Event -EventName "System.EngineCleanup"
+        }
     }
     catch {
         Write-Host "Error during TUI cleanup: $_" -ForegroundColor Red
@@ -161,8 +203,12 @@ function global:Push-Screen {
     
     $script:TuiState.CurrentScreen = $Screen
     if ($Screen.Init) { & $Screen.Init -self $Screen }
+    
     Request-TuiRefresh
-    Publish-Event -EventName "Screen.Pushed" -Data @{ ScreenName = $Screen.Name }
+    
+    if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
+        Publish-Event -EventName "Screen.Pushed" -Data @{ ScreenName = $Screen.Name }
+    }
 }
 
 function global:Pop-Screen {
@@ -183,7 +229,11 @@ function global:Pop-Screen {
     }
     
     Request-TuiRefresh
-    Publish-Event -EventName "Screen.Popped" -Data @{ ScreenName = $script:TuiState.CurrentScreen.Name }
+    
+    if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
+        Publish-Event -EventName "Screen.Popped" -Data @{ ScreenName = $script:TuiState.CurrentScreen.Name }
+    }
+    
     return $true
 }
 
@@ -222,24 +272,6 @@ function global:Write-BufferString {
             }
         }
         $currentX++
-    }
-}
-
-function global:Write-BufferChar {
-    param(
-        [int]$X, 
-        [int]$Y, 
-        [char]$Char, 
-        [ConsoleColor]$ForegroundColor = [ConsoleColor]::White, 
-        [ConsoleColor]$BackgroundColor = [ConsoleColor]::Black
-    )
-    if ($Y -ge 0 -and $Y -lt $script:TuiState.BufferHeight -and 
-        $X -ge 0 -and $X -lt $script:TuiState.BufferWidth) {
-        $script:TuiState.BackBuffer[$Y, $X] = @{ 
-            Char = $Char
-            FG = $ForegroundColor
-            BG = $BackgroundColor 
-        }
     }
 }
 
@@ -286,19 +318,28 @@ function global:Render-BufferOptimized {
     $lastFG = -1
     $lastBG = -1
     
+    # Build ANSI output with change detection
     for ($y = 0; $y -lt $script:TuiState.BufferHeight; $y++) {
+        # Position cursor at start of line
         $outputBuilder.Append("`e[$($y + 1);1H") | Out-Null
         
         for ($x = 0; $x -lt $script:TuiState.BufferWidth; $x++) {
             $backCell = $script:TuiState.BackBuffer[$y, $x]
             $frontCell = $script:TuiState.FrontBuffer[$y, $x]
             
+            # Skip if cell hasn't changed
             if ($backCell.Char -eq $frontCell.Char -and 
                 $backCell.FG -eq $frontCell.FG -and 
                 $backCell.BG -eq $frontCell.BG) {
                 continue
             }
             
+            # Position cursor if we skipped cells
+            if ($x -gt 0 -and $outputBuilder.Length -gt 0) {
+                $outputBuilder.Append("`e[$($y + 1);$($x + 1)H") | Out-Null
+            }
+            
+            # Update colors if changed
             if ($backCell.FG -ne $lastFG -or $backCell.BG -ne $lastBG) {
                 $fgCode = Get-AnsiColorCode $backCell.FG
                 $bgCode = Get-AnsiColorCode $backCell.BG -IsBackground $true
@@ -307,13 +348,20 @@ function global:Render-BufferOptimized {
                 $lastBG = $backCell.BG
             }
             
+            # Append character
             $outputBuilder.Append($backCell.Char) | Out-Null
+            
+            # Update front buffer
             $script:TuiState.FrontBuffer[$y, $x] = $backCell.Clone()
         }
     }
     
-    [Console]::Write($outputBuilder.ToString())
+    # Write to console using ANSI sequences
+    if ($outputBuilder.Length -gt 0) {
+        [Console]::Write($outputBuilder.ToString())
+    }
     
+    # Update stats
     $stopwatch.Stop()
     $script:TuiState.RenderStats.LastFrameTime = $stopwatch.ElapsedMilliseconds
     $script:TuiState.RenderStats.FrameCount++
@@ -322,7 +370,7 @@ function global:Render-BufferOptimized {
 
 #endregion
 
-#region Input and Utility
+#region Input Handling
 
 function global:Initialize-InputHandler {
     $runspace = [runspacefactory]::CreateRunspace()
@@ -374,22 +422,183 @@ function global:Stop-InputHandler {
     } 
 }
 
-function global:Get-BorderChars { 
-    param([string]$Style) 
+#endregion
+
+#region Component System
+
+function Initialize-ComponentSystem {
+    $script:TuiState.Components = @()
+    $script:TuiState.FocusedComponent = $null
+}
+
+function global:Register-Component {
+    param([hashtable]$Component)
     
-    # Use theme manager if available
-    if (Get-Command -Name "Get-BorderCharacter" -ErrorAction SilentlyContinue) {
-        return @{
-            TopLeft = Get-BorderCharacter "TopLeft"
-            TopRight = Get-BorderCharacter "TopRight"
-            BottomLeft = Get-BorderCharacter "BottomLeft"
-            BottomRight = Get-BorderCharacter "BottomRight"
-            Horizontal = Get-BorderCharacter "Horizontal"
-            Vertical = Get-BorderCharacter "Vertical"
-        }
+    # Add to component registry
+    $script:TuiState.Components += $Component
+    
+    # Initialize component
+    if ($Component.Init) {
+        & $Component.Init -self $Component
     }
     
-    # Fallback to built-in styles
+    return $Component
+}
+
+function global:Set-ComponentFocus {
+    param([hashtable]$Component)
+    
+    # Blur previous component
+    if ($script:TuiState.FocusedComponent -and $script:TuiState.FocusedComponent.OnBlur) {
+        & $script:TuiState.FocusedComponent.OnBlur -self $script:TuiState.FocusedComponent
+    }
+    
+    # Focus new component
+    $script:TuiState.FocusedComponent = $Component
+    if ($Component -and $Component.OnFocus) {
+        & $Component.OnFocus -self $Component
+    }
+    
+    Request-TuiRefresh
+}
+
+function global:New-Component {
+    param(
+        [string]$Type = "Base",
+        [int]$X = 0,
+        [int]$Y = 0,
+        [int]$Width = 10,
+        [int]$Height = 1,
+        [hashtable]$Props = @{}
+    )
+    
+    $component = @{
+        Type = $Type
+        X = $X
+        Y = $Y
+        Width = $Width
+        Height = $Height
+        Visible = $true
+        Focused = $false
+        Parent = $null
+        Children = @()
+        Props = $Props
+        State = @{}
+        
+        # Lifecycle methods
+        Init = { param($self) }
+        Render = { param($self) }
+        HandleInput = { param($self, $Key) return $false }
+        OnFocus = { param($self) $self.Focused = $true }
+        OnBlur = { param($self) $self.Focused = $false }
+        Dispose = { param($self) }
+    }
+    
+    # Merge with type-specific properties
+    switch ($Type) {
+        "TextInput" { $component = Merge-Hashtables $component (Get-TextInputComponent) }
+        "Button" { $component = Merge-Hashtables $component (Get-ButtonComponent) }
+        "List" { $component = Merge-Hashtables $component (Get-ListComponent) }
+        "Table" { $component = Merge-Hashtables $component (Get-TableComponent) }
+    }
+    
+    return $component
+}
+
+function Merge-Hashtables {
+    param($Base, $Override)
+    $result = $Base.Clone()
+    foreach ($key in $Override.Keys) {
+        $result[$key] = $Override[$key]
+    }
+    return $result
+}
+
+#endregion
+
+#region Layout Management
+
+function Initialize-LayoutEngines {
+    $script:TuiState.Layouts = @{
+        Grid = Get-GridLayout
+        Stack = Get-StackLayout
+        Dock = Get-DockLayout
+    }
+}
+
+function global:Apply-Layout {
+    param(
+        [string]$LayoutType,
+        [hashtable[]]$Components,
+        [hashtable]$Options = @{}
+    )
+    
+    if ($script:TuiState.Layouts.ContainsKey($LayoutType)) {
+        $layout = $script:TuiState.Layouts[$LayoutType]
+        & $layout.Apply -Components $Components -Options $Options
+    }
+}
+
+function Get-GridLayout {
+    return @{
+        Apply = {
+            param($Components, $Options)
+            $cols = $Options.Columns ?? 2
+            $rows = [Math]::Ceiling($Components.Count / $cols)
+            $cellWidth = [Math]::Floor($script:TuiState.BufferWidth / $cols)
+            $cellHeight = [Math]::Floor($script:TuiState.BufferHeight / $rows)
+            
+            for ($i = 0; $i -lt $Components.Count; $i++) {
+                $col = $i % $cols
+                $row = [Math]::Floor($i / $cols)
+                $Components[$i].X = $col * $cellWidth
+                $Components[$i].Y = $row * $cellHeight
+                $Components[$i].Width = $cellWidth - 1
+                $Components[$i].Height = $cellHeight - 1
+            }
+        }
+    }
+}
+
+function Get-StackLayout {
+    return @{
+        Apply = {
+            param($Components, $Options)
+            $orientation = $Options.Orientation ?? "Vertical"
+            $spacing = $Options.Spacing ?? 1
+            $x = $Options.X ?? 0
+            $y = $Options.Y ?? 0
+            
+            foreach ($component in $Components) {
+                $component.X = $x
+                $component.Y = $y
+                
+                if ($orientation -eq "Vertical") {
+                    $y += $component.Height + $spacing
+                } else {
+                    $x += $component.Width + $spacing
+                }
+            }
+        }
+    }
+}
+
+function Get-DockLayout {
+    return @{
+        Apply = {
+            param($Components, $Options)
+            # Implementation for dock layout (Top, Bottom, Left, Right, Fill)
+            # This is a placeholder for the full implementation
+        }
+    }
+}
+
+#endregion
+
+#region Utility Functions
+
+function global:Get-BorderChars { 
+    param([string]$Style) 
     $styles = @{ 
         Single = @{ 
             TopLeft='┌'; TopRight='┐'; BottomLeft='└'; BottomRight='┘'
@@ -437,17 +646,181 @@ function global:Write-StatusLine {
 
 #endregion
 
+#region Component Definitions
+
+function Get-TextInputComponent {
+    return @{
+        # State
+        Value = ""
+        CursorPosition = 0
+        MaxLength = 50
+        
+        # Methods
+        Render = {
+            param($self)
+            $borderColor = if ($self.Focused) { 
+                Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan)
+            } else { 
+                Get-ThemeColor "Border" -Default ([ConsoleColor]::DarkGray)
+            }
+            
+            # Draw input box
+            Write-BufferBox -X $self.X -Y $self.Y -Width $self.Width -Height $self.Height `
+                -BorderColor $borderColor -BackgroundColor ([ConsoleColor]::Black)
+            
+            # Draw text
+            $displayText = $self.Value
+            if ($displayText.Length > ($self.Width - 3)) {
+                $displayText = $displayText.Substring($displayText.Length - ($self.Width - 3))
+            }
+            Write-BufferString -X ($self.X + 1) -Y ($self.Y + 1) -Text $displayText
+            
+            # Draw cursor if focused
+            if ($self.Focused -and $self.CursorPosition -lt ($self.Width - 3)) {
+                Write-BufferString -X ($self.X + 1 + $self.CursorPosition) -Y ($self.Y + 1) `
+                    -Text "_" -ForegroundColor ([ConsoleColor]::Yellow)
+            }
+        }
+        
+        HandleInput = {
+            param($self, $Key)
+            switch ($Key.Key) {
+                ([ConsoleKey]::Backspace) {
+                    if ($self.Value.Length -gt 0 -and $self.CursorPosition -gt 0) {
+                        $self.Value = $self.Value.Remove($self.CursorPosition - 1, 1)
+                        $self.CursorPosition--
+                    }
+                    return $true
+                }
+                ([ConsoleKey]::Delete) {
+                    if ($self.CursorPosition -lt $self.Value.Length) {
+                        $self.Value = $self.Value.Remove($self.CursorPosition, 1)
+                    }
+                    return $true
+                }
+                ([ConsoleKey]::LeftArrow) {
+                    if ($self.CursorPosition -gt 0) {
+                        $self.CursorPosition--
+                    }
+                    return $true
+                }
+                ([ConsoleKey]::RightArrow) {
+                    if ($self.CursorPosition -lt $self.Value.Length) {
+                        $self.CursorPosition++
+                    }
+                    return $true
+                }
+                ([ConsoleKey]::Home) {
+                    $self.CursorPosition = 0
+                    return $true
+                }
+                ([ConsoleKey]::End) {
+                    $self.CursorPosition = $self.Value.Length
+                    return $true
+                }
+                default {
+                    if ($Key.KeyChar -and -not [char]::IsControl($Key.KeyChar) -and 
+                        $self.Value.Length -lt $self.MaxLength) {
+                        $self.Value = $self.Value.Insert($self.CursorPosition, $Key.KeyChar)
+                        $self.CursorPosition++
+                        return $true
+                    }
+                }
+            }
+            return $false
+        }
+    }
+}
+
+function Get-ButtonComponent {
+    return @{
+        # State
+        Text = "Button"
+        
+        # Methods
+        Render = {
+            param($self)
+            $bgColor = if ($self.Focused) { 
+                Get-ThemeColor "Accent" -Default ([ConsoleColor]::DarkCyan)
+            } else { 
+                Get-ThemeColor "Primary" -Default ([ConsoleColor]::DarkGray)
+            }
+            
+            $text = " $($self.Text) "
+            if ($text.Length > $self.Width) {
+                $text = $text.Substring(0, $self.Width)
+            }
+            
+            $x = $self.X + [Math]::Floor(($self.Width - $text.Length) / 2)
+            Write-BufferString -X $x -Y $self.Y -Text $text `
+                -ForegroundColor ([ConsoleColor]::White) -BackgroundColor $bgColor
+        }
+        
+        HandleInput = {
+            param($self, $Key)
+            if ($Key.Key -eq [ConsoleKey]::Enter -or $Key.Key -eq [ConsoleKey]::Spacebar) {
+                if ($self.OnClick) {
+                    & $self.OnClick -self $self
+                }
+                return $true
+            }
+            return $false
+        }
+    }
+}
+
+function Get-TableComponent {
+    return @{
+        # State
+        Data = @()
+        Columns = @()
+        SelectedRow = 0
+        ScrollOffset = 0
+        
+        # Methods
+        Render = {
+            param($self)
+            # Simplified table rendering
+            $y = $self.Y
+            
+            # Header
+            $headerText = ""
+            foreach ($col in $self.Columns) {
+                $headerText += $col.Name.PadRight($col.Width)
+            }
+            Write-BufferString -X $self.X -Y $y -Text $headerText `
+                -ForegroundColor (Get-ThemeColor "Header" -Default ([ConsoleColor]::Cyan))
+            $y++
+            
+            # Data rows
+            $visibleRows = $self.Data | Select-Object -Skip $self.ScrollOffset -First ($self.Height - 1)
+            $rowIndex = $self.ScrollOffset
+            foreach ($row in $visibleRows) {
+                $rowText = ""
+                foreach ($col in $self.Columns) {
+                    $value = $row.($col.Property) ?? ""
+                    $rowText += $value.ToString().PadRight($col.Width)
+                }
+                
+                $fg = if ($rowIndex -eq $self.SelectedRow) {
+                    Get-ThemeColor "Selection" -Default ([ConsoleColor]::Yellow)
+                } else {
+                    Get-ThemeColor "Primary" -Default ([ConsoleColor]::White)
+                }
+                
+                Write-BufferString -X $self.X -Y $y -Text $rowText -ForegroundColor $fg
+                $y++
+                $rowIndex++
+            }
+        }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
-    'Initialize-TuiEngine',
-    'Start-TuiLoop', 
-    'Request-TuiRefresh', 
-    'Restore-TuiState',
-    'Push-Screen', 
-    'Pop-Screen',
-    'Write-BufferString', 
-    'Write-BufferChar',
-    'Write-BufferBox', 
-    'Clear-BackBuffer',
-    'Write-StatusLine',
-    'Get-BorderChars'
+    'Start-TuiLoop', 'Request-TuiRefresh', 'Push-Screen', 'Pop-Screen',
+    'Write-BufferString', 'Write-BufferBox', 'Clear-BackBuffer',
+    'Write-StatusLine', 'Get-BorderChars',
+    'Register-Component', 'Set-ComponentFocus', 'New-Component', 'Apply-Layout'
 ) -Variable @('TuiState')

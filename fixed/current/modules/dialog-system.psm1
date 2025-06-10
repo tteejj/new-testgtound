@@ -1,391 +1,339 @@
-# Dialog System Module - Modal dialogs and notifications
+# Dialog System Module (Fixed Input Handling)
+# Provides a high-level API for modal dialogs using a robust, component-based architecture.
 
-# Initialize dialog state
 $script:DialogState = @{
-    DialogStack = [System.Collections.Stack]::new()
     CurrentDialog = $null
-    ToastQueue = [System.Collections.Queue]::new()
-    ActiveToasts = @()
+    DialogStack   = [System.Collections.Stack]::new()
 }
 
-function global:Initialize-DialogSystem {
-    # Subscribe to dialog events
-    Subscribe-Event -EventName "Dialog.Show" -Handler {
-        param($EventData)
-        Show-Dialog -DialogData $EventData.Data
-    }
+#region --- Public API & Factory Functions ---
+
+function global:Show-TuiDialog {
+    <# .SYNOPSIS Internal function to display a dialog component. #>
+    param([hashtable]$DialogComponent)
     
-    Subscribe-Event -EventName "Notification.Show" -Handler {
-        param($EventData)
-        Show-NotificationToast -Data $EventData.Data
+    if ($script:DialogState.CurrentDialog) {
+        $script:DialogState.DialogStack.Push($script:DialogState.CurrentDialog)
     }
-    
-    Subscribe-Event -EventName "Confirm.Request" -Handler {
-        param($EventData)
-        Show-ConfirmDialog -Data $EventData.Data
-    }
+    $script:DialogState.CurrentDialog = $DialogComponent
+    Request-TuiRefresh
 }
 
-function global:Show-NotificationToast {
-    param($Data)
-    
-    $toast = @{
-        Type = "Toast"
-        Text = $Data.Text
-        NotificationType = $Data.Type ?? "Info"
-        Duration = $Data.Duration ?? 3000
-        StartTime = [DateTime]::Now
-        Id = [System.Guid]::NewGuid().ToString()
-        
-        Render = {
-            param($self)
-            
-            $toastWidth = [Math]::Min(50, $self.Text.Length + 8)
-            $toastHeight = 4
-            $toastX = $script:TuiState.BufferWidth - $toastWidth - 2
-            
-            # Stack toasts vertically
-            $toastIndex = $script:DialogState.ActiveToasts.IndexOf($self)
-            $toastY = 2 + ($toastIndex * ($toastHeight + 1))
-            
-            $bgColor = switch ($self.NotificationType) {
-                "Success" { Get-ThemeColor "Success" }
-                "Error" { Get-ThemeColor "Error" }
-                "Warning" { Get-ThemeColor "Warning" }
-                default { Get-ThemeColor "Info" }
-            }
-            
-            # Toast background
-            Write-BufferBox -X $toastX -Y $toastY -Width $toastWidth -Height $toastHeight -BorderColor $bgColor
-            
-            # Icon and text
-            $icon = switch ($self.NotificationType) {
-                "Success" { "✓" }
-                "Error" { "✗" }
-                "Warning" { "⚠" }
-                default { "ℹ" }
-            }
-            
-            Write-BufferString -X ($toastX + 2) -Y ($toastY + 1) -Text "$icon $($self.Text)" -ForegroundColor $bgColor
-            
-            # Progress bar for duration
-            $elapsed = ([DateTime]::Now - $self.StartTime).TotalMilliseconds
-            $progress = [Math]::Min(1.0, $elapsed / $self.Duration)
-            $progressWidth = [Math]::Floor(($toastWidth - 4) * (1 - $progress))
-            
-            if ($progressWidth -gt 0) {
-                $progressBar = "█" * $progressWidth
-                Write-BufferString -X ($toastX + 2) -Y ($toastY + 2) -Text $progressBar -ForegroundColor $bgColor
-            }
-        }
-        
-        ShouldClose = {
-            $elapsed = ([DateTime]::Now - $this.StartTime).TotalMilliseconds
-            return $elapsed -gt $this.Duration
-        }
+function global:Close-TuiDialog {
+    <# .SYNOPSIS Closes the current dialog and restores the previous one, if any. #>
+    if ($script:DialogState.DialogStack.Count -gt 0) {
+        $script:DialogState.CurrentDialog = $script:DialogState.DialogStack.Pop()
+    } else {
+        $script:DialogState.CurrentDialog = $null
     }
-    
-    # Add to active toasts
-    $script:DialogState.ActiveToasts += $toast
-    
-    # Request UI refresh
-    if (Get-Command -Name "Request-TuiRefresh" -ErrorAction SilentlyContinue) {
-        Request-TuiRefresh
-    }
+    Request-TuiRefresh
 }
 
 function global:Show-ConfirmDialog {
-    param($Data)
+    <# .SYNOPSIS Displays a standard Yes/No confirmation dialog. #>
+    param(
+        [string]$Title = "Confirm",
+        [string]$Message,
+        [scriptblock]$OnConfirm,
+        [scriptblock]$OnCancel = {}
+    )
     
-    $confirmDialog = @{
-        Type = "Confirm"
-        Title = $Data.Title ?? "Confirm"
-        Message = $Data.Message
-        OnConfirm = $Data.OnConfirm
-        OnCancel = $Data.OnCancel
-        SelectedButton = 0  # 0 = Yes, 1 = No
-        
-        Render = {
-            param($self)
-            
-            # Calculate dialog dimensions
-            $dialogWidth = [Math]::Max(40, $self.Message.Length + 8)
-            $dialogHeight = 8
-            $dialogX = [Math]::Floor(($script:TuiState.BufferWidth - $dialogWidth) / 2)
-            $dialogY = [Math]::Floor(($script:TuiState.BufferHeight - $dialogHeight) / 2)
-            
-            # Draw semi-transparent overlay
-            for ($y = 0; $y -lt $script:TuiState.BufferHeight; $y++) {
-                for ($x = 0; $x -lt $script:TuiState.BufferWidth; $x++) {
-                    if ($y -ge $dialogY -and $y -lt ($dialogY + $dialogHeight) -and 
-                        $x -ge $dialogX -and $x -lt ($dialogX + $dialogWidth)) {
-                        continue
-                    }
-                    # Dim background
-                    $char = $script:TuiState.Buffer[$y][$x].Char
-                    if ($char -ne ' ') {
-                        Write-BufferChar -X $x -Y $y -Char $char -ForegroundColor "DarkGray"
-                    }
-                }
-            }
-            
-            # Dialog box
-            Write-BufferBox -X $dialogX -Y $dialogY -Width $dialogWidth -Height $dialogHeight -Title " $($self.Title) " -BorderColor (Get-ThemeColor "Warning")
-            
-            # Clear dialog interior
-            for ($y = $dialogY + 1; $y -lt ($dialogY + $dialogHeight - 1); $y++) {
-                Write-BufferString -X ($dialogX + 1) -Y $y -Text (" " * ($dialogWidth - 2)) -BackgroundColor "Black"
-            }
-            
-            # Message
-            $messageY = $dialogY + 2
-            $messageLines = $self.Message -split "`n"
-            foreach ($line in $messageLines) {
-                $centeredX = $dialogX + [Math]::Floor(($dialogWidth - $line.Length) / 2)
-                Write-BufferString -X $centeredX -Y $messageY -Text $line -ForegroundColor (Get-ThemeColor "Primary")
-                $messageY++
-            }
-            
-            # Buttons
-            $buttonY = $dialogY + $dialogHeight - 3
-            $buttonSpacing = 10
-            $buttonsWidth = 13 # "Yes" + "No" + spacing
-            $buttonsX = $dialogX + [Math]::Floor(($dialogWidth - $buttonsWidth) / 2)
-            
-            $yesColor = if ($self.SelectedButton -eq 0) { Get-ThemeColor "Warning" } else { Get-ThemeColor "Primary" }
-            $noColor = if ($self.SelectedButton -eq 1) { Get-ThemeColor "Warning" } else { Get-ThemeColor "Primary" }
-            
-            $yesText = if ($self.SelectedButton -eq 0) { "[Yes]" } else { " Yes " }
-            $noText = if ($self.SelectedButton -eq 1) { "[No]" } else { " No " }
-            
-            Write-BufferString -X $buttonsX -Y $buttonY -Text $yesText -ForegroundColor $yesColor
-            Write-BufferString -X ($buttonsX + $buttonSpacing) -Y $buttonY -Text $noText -ForegroundColor $noColor
+    $dialog = New-TuiDialog -Props @{
+        Title         = $Title
+        Message       = $Message
+        Buttons       = @("Yes", "No")
+        Width         = [Math]::Min(80, [Math]::Max(50, $Message.Length + 10))
+        Height        = 10
+        OnButtonClick = {
+            param($Button, $Index)
+            Close-TuiDialog
+            if ($Index -eq 0) { & $OnConfirm } else { & $OnCancel }
         }
-        
-        HandleInput = {
-            param($self, $Key)
-            
-            switch ($Key.Key) {
-                ([ConsoleKey]::LeftArrow) { 
-                    $self.SelectedButton = 0
-                    return $true 
-                }
-                ([ConsoleKey]::RightArrow) { 
-                    $self.SelectedButton = 1
-                    return $true 
-                }
-                ([ConsoleKey]::Tab) { 
-                    $self.SelectedButton = 1 - $self.SelectedButton
-                    return $true 
-                }
-                ([ConsoleKey]::Enter) {
-                    if ($self.SelectedButton -eq 0 -and $self.OnConfirm) {
-                        & $self.OnConfirm
-                    } elseif ($self.SelectedButton -eq 1 -and $self.OnCancel) {
-                        & $self.OnCancel
-                    }
-                    Close-Dialog
-                    return $true
-                }
-                ([ConsoleKey]::Y) {
-                    if ($self.OnConfirm) { & $self.OnConfirm }
-                    Close-Dialog
-                    return $true
-                }
-                ([ConsoleKey]::N) {
-                    if ($self.OnCancel) { & $self.OnCancel }
-                    Close-Dialog
-                    return $true
-                }
-                ([ConsoleKey]::Escape) {
-                    if ($self.OnCancel) { & $self.OnCancel }
-                    Close-Dialog
-                    return $true
-                }
-            }
-            return $false
-        }
+        OnCancel      = { Close-TuiDialog; & $OnCancel }
     }
+    Show-TuiDialog -DialogComponent $dialog
+}
+
+function global:Show-AlertDialog {
+    <# .SYNOPSIS Displays a simple alert with an OK button. #>
+    param(
+        [string]$Title = "Alert",
+        [string]$Message
+    )
     
-    Push-Dialog -Dialog $confirmDialog
+    $dialog = New-TuiDialog -Props @{
+        Title         = $Title
+        Message       = $Message
+        Buttons       = @("OK")
+        Width         = [Math]::Min(80, [Math]::Max(40, $Message.Length + 10))
+        Height        = 10
+        OnButtonClick = { Close-TuiDialog }
+        OnCancel      = { Close-TuiDialog }
+    }
+    Show-TuiDialog -DialogComponent $dialog
 }
 
 function global:Show-InputDialog {
-    param($Data)
-    
-    $inputDialog = @{
-        Type = "Input"
-        Title = $Data.Title ?? "Input"
-        Prompt = $Data.Prompt
-        Value = $Data.DefaultValue ?? ""
-        MaxLength = $Data.MaxLength ?? 50
-        OnSubmit = $Data.OnSubmit
-        OnCancel = $Data.OnCancel
-        CursorPosition = 0
-        
-        Render = {
-            param($self)
-            
-            $dialogWidth = [Math]::Max(60, $self.Prompt.Length + 4)
-            $dialogHeight = 10
-            $dialogX = [Math]::Floor(($script:TuiState.BufferWidth - $dialogWidth) / 2)
-            $dialogY = [Math]::Floor(($script:TuiState.BufferHeight - $dialogHeight) / 2)
-            
-            # Dialog box
-            Write-BufferBox -X $dialogX -Y $dialogY -Width $dialogWidth -Height $dialogHeight -Title " $($self.Title) " -BorderColor (Get-ThemeColor "Accent")
-            
-            # Prompt
-            Write-BufferString -X ($dialogX + 2) -Y ($dialogY + 2) -Text $self.Prompt -ForegroundColor (Get-ThemeColor "Primary")
-            
-            # Input field
-            $inputY = $dialogY + 4
-            $inputWidth = $dialogWidth - 6
-            Write-BufferString -X ($dialogX + 2) -Y $inputY -Text "[" -ForegroundColor (Get-ThemeColor "Accent")
-            Write-BufferString -X ($dialogX + 3) -Y $inputY -Text $self.Value.PadRight($inputWidth) -ForegroundColor (Get-ThemeColor "Warning")
-            Write-BufferString -X ($dialogX + 3 + $inputWidth) -Y $inputY -Text "]" -ForegroundColor (Get-ThemeColor "Accent")
-            
-            # Cursor
-            if ($self.CursorPosition -lt $inputWidth) {
-                $cursorX = $dialogX + 3 + $self.CursorPosition
-                Write-BufferChar -X $cursorX -Y $inputY -Char "_" -ForegroundColor (Get-ThemeColor "Warning") -BackgroundColor "DarkGray"
-            }
-            
-            # Instructions
-            Write-BufferString -X ($dialogX + 2) -Y ($dialogY + $dialogHeight - 2) -Text "Enter: Submit • Esc: Cancel" -ForegroundColor (Get-ThemeColor "Subtle")
+    <# .SYNOPSIS Displays a dialog to get text input from the user. #>
+    param(
+        [string]$Title = "Input",
+        [string]$Prompt,
+        [string]$DefaultValue = "",
+        [scriptblock]$OnSubmit,
+        [scriptblock]$OnCancel = {}
+    )
+
+    # This dialog is a TuiForm containing a Label, TextBox, and Buttons.
+    $form = New-TuiForm -Props @{
+        Name    = "InputDialogForm"
+        Title   = " $Title "
+        Width   = [Math]::Min(80, [Math]::Max(50, $Prompt.Length + 6))
+        Height  = 12
+        Padding = 2
+        State   = @{
+            InputValue       = $DefaultValue
+            InputCursor      = $DefaultValue.Length
+            FocusedChildName = "InputTextBox" # Start focus on the textbox
         }
-        
+        Children = @(
+            New-TuiLabel -Props @{
+                Name = "PromptLabel"
+                X = 0; Y = 0
+                Text = $Prompt
+            }
+            New-TuiTextBox -Props @{
+                Name           = "InputTextBox"
+                X = 0; Y = 2
+                Width          = [Math]::Min(76, [Math]::Max(46, $Prompt.Length + 2))
+                TextProp       = "InputValue"
+                CursorProp     = "InputCursor"
+                OnChange       = { $this.State.InputValue = $args[0].NewText; $this.State.InputCursor = $args[0].NewCursorPosition }
+            }
+            New-TuiButton -Props @{
+                Name    = "SubmitButton"
+                X = 0; Y = 6
+                Width   = 12
+                Text    = "OK"
+                OnClick = { 
+                    Close-TuiDialog
+                    & $OnSubmit -Value $this.State.InputValue
+                }
+            }
+            New-TuiButton -Props @{
+                Name    = "CancelButton"
+                X = 14; Y = 6
+                Width   = 12
+                Text    = "Cancel"
+                OnClick = { 
+                    Close-TuiDialog
+                    & $OnCancel
+                }
+            }
+        )
+        # Override the form's input handler to also catch Enter/Escape globally
         HandleInput = {
             param($self, $Key)
-            
-            switch ($Key.Key) {
-                ([ConsoleKey]::Enter) {
-                    if ($self.OnSubmit) {
-                        & $self.OnSubmit $self.Value
-                    }
-                    Close-Dialog
-                    return $true
-                }
-                ([ConsoleKey]::Escape) {
-                    if ($self.OnCancel) {
-                        & $self.OnCancel
-                    }
-                    Close-Dialog
-                    return $true
-                }
-                ([ConsoleKey]::Backspace) {
-                    if ($self.Value.Length -gt 0 -and $self.CursorPosition -gt 0) {
-                        $self.Value = $self.Value.Remove($self.CursorPosition - 1, 1)
-                        $self.CursorPosition--
-                    }
-                    return $true
-                }
-                ([ConsoleKey]::Delete) {
-                    if ($self.CursorPosition -lt $self.Value.Length) {
-                        $self.Value = $self.Value.Remove($self.CursorPosition, 1)
-                    }
-                    return $true
-                }
-                ([ConsoleKey]::LeftArrow) {
-                    if ($self.CursorPosition -gt 0) {
-                        $self.CursorPosition--
-                    }
-                    return $true
-                }
-                ([ConsoleKey]::RightArrow) {
-                    if ($self.CursorPosition -lt $self.Value.Length) {
-                        $self.CursorPosition++
-                    }
-                    return $true
-                }
-                ([ConsoleKey]::Home) {
-                    $self.CursorPosition = 0
-                    return $true
-                }
-                ([ConsoleKey]::End) {
-                    $self.CursorPosition = $self.Value.Length
-                    return $true
-                }
-                default {
-                    if ($Key.KeyChar -and -not [char]::IsControl($Key.KeyChar) -and $self.Value.Length -lt $self.MaxLength) {
-                        $self.Value = $self.Value.Insert($self.CursorPosition, $Key.KeyChar)
-                        $self.CursorPosition++
-                        return $true
-                    }
-                }
+            if ($Key.Key -eq [ConsoleKey]::Escape) {
+                Close-TuiDialog
+                & $OnCancel
+                return $true
             }
-            return $false
-        }
+            
+            # Let the default TuiForm handler manage Tab and child input (Enter on buttons, etc.)
+            $formPrototype = New-TuiForm
+            $handledByChild = & $formPrototype.HandleInput -self $self -Key $Key
+
+            # If not handled by a child (e.g. Enter in TextBox), treat as submit
+            if (-not $handledByChild -and $Key.Key -eq [ConsoleKey]::Enter) {
+                Close-TuiDialog
+                & $OnSubmit -Value $self.State.InputValue
+                return $true
+            }
+
+            return $handledByChild
+        }.GetNewClosure()
     }
-    
-    Push-Dialog -Dialog $inputDialog
+    Show-TuiDialog -DialogComponent $form
 }
 
-function Push-Dialog {
-    param($Dialog)
-    
-    $script:DialogState.DialogStack.Push($Dialog)
-    $script:DialogState.CurrentDialog = $Dialog
-    
-    if (Get-Command -Name "Request-TuiRefresh" -ErrorAction SilentlyContinue) {
-        Request-TuiRefresh
-    }
-}
+#endregion
 
-function Close-Dialog {
-    if ($script:DialogState.DialogStack.Count -gt 0) {
-        $script:DialogState.DialogStack.Pop() | Out-Null
-        
-        if ($script:DialogState.DialogStack.Count -gt 0) {
-            $script:DialogState.CurrentDialog = $script:DialogState.DialogStack.Peek()
-        } else {
-            $script:DialogState.CurrentDialog = $null
-        }
-        
-        if (Get-Command -Name "Request-TuiRefresh" -ErrorAction SilentlyContinue) {
-            Request-TuiRefresh
-        }
-    }
-}
+#region --- Engine Integration & Initialization ---
 
-function global:Update-DialogSystem {
-    # Remove expired toasts
-    $script:DialogState.ActiveToasts = @($script:DialogState.ActiveToasts | Where-Object {
-        -not $_.ShouldClose.Invoke()
-    })
+function global:Initialize-DialogSystem {
+    <# .SYNOPSIS Subscribes to high-level application events to show dialogs. #>
+    
+    Subscribe-Event -EventName "Confirm.Request" -Handler {
+        param($EventData)
+        $dialogParams = $EventData.Data
+        Show-ConfirmDialog @dialogParams
+    }
+    
+    Subscribe-Event -EventName "Alert.Show" -Handler {
+        param($EventData)
+        $dialogParams = $EventData.Data
+        Show-AlertDialog @dialogParams
+    }
+    
+    Subscribe-Event -EventName "Input.Request" -Handler {
+        param($EventData)
+        $dialogParams = $EventData.Data
+        Show-InputDialog @dialogParams
+    }
+    
+    Write-Verbose "Dialog System initialized and event handlers registered."
 }
 
 function global:Render-Dialogs {
-    # Render active toasts
-    foreach ($toast in $script:DialogState.ActiveToasts) {
-        if ($toast.Render) {
-            & $toast.Render -self $toast
-        }
-    }
-    
-    # Render current modal dialog
-    if ($script:DialogState.CurrentDialog -and $script:DialogState.CurrentDialog.Render) {
-        & $script:DialogState.CurrentDialog.Render -self $script:DialogState.CurrentDialog
+    <# .SYNOPSIS Engine Hook: Renders the current dialog over the screen. #>
+    if ($script:DialogState.CurrentDialog) {
+        # Center the dialog component before rendering
+        $dialog = $script:DialogState.CurrentDialog
+        $dialog.X = [Math]::Floor(($script:TuiState.BufferWidth - $dialog.Width) / 2)
+        $dialog.Y = [Math]::Floor(($script:TuiState.BufferHeight - $dialog.Height) / 2)
+        
+        & $dialog.Render -self $dialog
     }
 }
 
 function global:Handle-DialogInput {
-    param($Key)
+    <# .SYNOPSIS Engine Hook: Intercepts input if a dialog is active. #>
+    param($Key)  # Removed type constraint to match fixed input handling
     
-    # Modal dialogs take input priority
-    if ($script:DialogState.CurrentDialog -and $script:DialogState.CurrentDialog.HandleInput) {
+    if ($script:DialogState.CurrentDialog) {
         return & $script:DialogState.CurrentDialog.HandleInput -self $script:DialogState.CurrentDialog -Key $Key
     }
-    
-    return $false
+    return $false # No active dialog, input was not handled.
 }
 
-# Export module members
+function global:Update-DialogSystem {
+    <# .SYNOPSIS Engine Hook: Updates dialog system state. #>
+    # Placeholder for any periodic updates needed
+}
+
+function global:New-TuiDialog {
+    <# .SYNOPSIS Creates a simple dialog component. #>
+    param([hashtable]$Props = @{})
+    
+    $dialog = @{
+        Type = "Dialog"
+        Title = $Props.Title ?? "Dialog"
+        Message = $Props.Message ?? ""
+        Buttons = $Props.Buttons ?? @("OK")
+        SelectedButton = 0
+        Width = $Props.Width ?? 50
+        Height = $Props.Height ?? 10
+        X = 0
+        Y = 0
+        OnButtonClick = $Props.OnButtonClick ?? {}
+        OnCancel = $Props.OnCancel ?? {}
+        
+        Render = {
+            param($self)
+            
+            # Draw dialog box
+            Write-BufferBox -X $self.X -Y $self.Y -Width $self.Width -Height $self.Height -Title $self.Title -BorderColor (Get-ThemeColor "Accent")
+            
+            # Message
+            $messageY = $self.Y + 2
+            $messageX = $self.X + 2
+            $maxWidth = $self.Width - 4
+            
+            # Word wrap message if needed
+            if ($self.Message.Length -le $maxWidth) {
+                Write-BufferString -X $messageX -Y $messageY -Text $self.Message -ForegroundColor (Get-ThemeColor "Primary")
+            } else {
+                # Simple word wrapping
+                $words = $self.Message -split ' '
+                $line = ""
+                $currentY = $messageY
+                
+                foreach ($word in $words) {
+                    if (($line + " " + $word).Length -gt $maxWidth) {
+                        Write-BufferString -X $messageX -Y $currentY -Text $line.Trim() -ForegroundColor (Get-ThemeColor "Primary")
+                        $currentY++
+                        $line = $word
+                    } else {
+                        $line = if ($line) { "$line $word" } else { $word }
+                    }
+                }
+                if ($line) {
+                    Write-BufferString -X $messageX -Y $currentY -Text $line.Trim() -ForegroundColor (Get-ThemeColor "Primary")
+                }
+            }
+            
+            # Buttons
+            $buttonY = $self.Y + $self.Height - 3
+            $totalButtonWidth = ($self.Buttons.Count * 12) + (($self.Buttons.Count - 1) * 2)
+            $buttonX = $self.X + [Math]::Floor(($self.Width - $totalButtonWidth) / 2)
+            
+            for ($i = 0; $i -lt $self.Buttons.Count; $i++) {
+                $isSelected = ($i -eq $self.SelectedButton)
+                $buttonText = if ($isSelected) { "[ $($self.Buttons[$i]) ]" } else { "  $($self.Buttons[$i])  " }
+                $color = if ($isSelected) { Get-ThemeColor "Warning" } else { Get-ThemeColor "Primary" }
+                
+                Write-BufferString -X $buttonX -Y $buttonY -Text $buttonText -ForegroundColor $color
+                $buttonX += 14
+            }
+        }
+        
+        HandleInput = {
+            param($self, $Key)
+            
+            switch ($Key.Key) {
+                ([ConsoleKey]::LeftArrow) {
+                    $self.SelectedButton = [Math]::Max(0, $self.SelectedButton - 1)
+                    Request-TuiRefresh
+                    return $true
+                }
+                ([ConsoleKey]::RightArrow) {
+                    $self.SelectedButton = [Math]::Min($self.Buttons.Count - 1, $self.SelectedButton + 1)
+                    Request-TuiRefresh
+                    return $true
+                }
+                ([ConsoleKey]::Tab) {
+                    $self.SelectedButton = ($self.SelectedButton + 1) % $self.Buttons.Count
+                    Request-TuiRefresh
+                    return $true
+                }
+                ([ConsoleKey]::Enter) {
+                    & $self.OnButtonClick -Button $self.Buttons[$self.SelectedButton] -Index $self.SelectedButton
+                    return $true
+                }
+                ([ConsoleKey]::Escape) {
+                    & $self.OnCancel
+                    return $true
+                }
+            }
+            
+            # Check for button hotkeys (first letter)
+            if ($Key.KeyChar) {
+                $char = [char]::ToUpper($Key.KeyChar)
+                for ($i = 0; $i -lt $self.Buttons.Count; $i++) {
+                    if ($self.Buttons[$i].Length -gt 0 -and [char]::ToUpper($self.Buttons[$i][0]) -eq $char) {
+                        & $self.OnButtonClick -Button $self.Buttons[$i] -Index $i
+                        return $true
+                    }
+                }
+            }
+            
+            return $false
+        }
+    }
+    
+    return $dialog
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Initialize-DialogSystem',
-    'Show-NotificationToast',
     'Show-ConfirmDialog',
+    'Show-AlertDialog',
     'Show-InputDialog',
-    'Update-DialogSystem',
+    'Close-TuiDialog',
     'Render-Dialogs',
-    'Handle-DialogInput'
+    'Handle-DialogInput',
+    'Update-DialogSystem',
+    'New-TuiDialog'
 )

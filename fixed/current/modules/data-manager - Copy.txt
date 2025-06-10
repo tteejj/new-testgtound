@@ -1,164 +1,181 @@
-# Data Manager Module - Unified data operations with event integration
-# This module consolidates all data operations from the current scattered implementation
+# Data Manager Module
+# Unified data persistence and CRUD operations with event integration
 
-# Initialize data structure if not exists
-if (-not $script:Data) {
-    $script:Data = @{
-        TimeEntries = @()
-        Tasks = @()
-        Projects = @{}
-        Templates = @{}
-        ActiveTimers = @{}
-        CommandSnippets = @()
-        Settings = @{
-            Theme = "Default"
-            AutoSave = $true
-            BackupRetentionDays = 7
-        }
+$script:Data = @{
+    Projects = @{}
+    Tasks = @()
+    TimeEntries = @()
+    ActiveTimers = @{}
+    TodoTemplates = @{}
+    Settings = @{
+        DefaultView = "Dashboard"
+        Theme = "Modern"
+        AutoSave = $true
+        BackupCount = 5
     }
 }
 
-# Data file path
-$script:DataFilePath = Join-Path $PSScriptRoot "..\data\pmc-data.json"
+$script:DataPath = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "PMCTerminal\pmc-data.json"
+$script:BackupPath = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "PMCTerminal\backups"
+$script:LastSaveTime = $null
+$script:DataModified = $false
+
+function global:Initialize-DataManager {
+    <#
+    .SYNOPSIS
+    Initializes the data management system
+    #>
+    
+    # Ensure data directory exists
+    $dataDir = Split-Path $script:DataPath -Parent
+    if (-not (Test-Path $dataDir)) {
+        New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+    }
+    
+    # Ensure backup directory exists
+    if (-not (Test-Path $script:BackupPath)) {
+        New-Item -ItemType Directory -Path $script:BackupPath -Force | Out-Null
+    }
+    
+    # Initialize event handlers
+    Initialize-DataEventHandlers
+    
+    # Make data globally accessible
+    $global:Data = $script:Data
+    
+    Write-Verbose "Data manager initialized"
+}
 
 function global:Load-UnifiedData {
-    param(
-        [string]$Path = $script:DataFilePath
-    )
+    <#
+    .SYNOPSIS
+    Loads data from the persistent storage
+    #>
     
-    if (Test-Path $Path) {
+    if (Test-Path $script:DataPath) {
         try {
-            $jsonContent = Get-Content $Path -Raw | ConvertFrom-Json
+            $jsonContent = Get-Content $script:DataPath -Raw
+            $loadedData = $jsonContent | ConvertFrom-Json -AsHashtable
             
-            # Convert JSON to hashtable structure
-            $script:Data = @{
-                TimeEntries = @($jsonContent.TimeEntries)
-                Tasks = @($jsonContent.Tasks)
-                Projects = @{}
-                Templates = @{}
-                ActiveTimers = @{}
-                CommandSnippets = @($jsonContent.CommandSnippets)
-                Settings = @{
-                    Theme = $jsonContent.Settings.Theme ?? "Default"
-                    AutoSave = $jsonContent.Settings.AutoSave ?? $true
-                    BackupRetentionDays = $jsonContent.Settings.BackupRetentionDays ?? 7
+            # Merge with default structure to ensure all keys exist
+            foreach ($key in $loadedData.Keys) {
+                $script:Data[$key] = $loadedData[$key]
+            }
+            
+            $script:LastSaveTime = (Get-Item $script:DataPath).LastWriteTime
+            Write-Verbose "Data loaded from $script:DataPath"
+            
+            # Publish event
+            Publish-Event -EventName "Data.Loaded" -Data @{ 
+                Path = $script:DataPath
+                ItemCount = @{
+                    Projects = $script:Data.Projects.Count
+                    Tasks = $script:Data.Tasks.Count
+                    TimeEntries = $script:Data.TimeEntries.Count
+                    ActiveTimers = $script:Data.ActiveTimers.Count
                 }
             }
-            
-            # Convert projects from array to hashtable
-            if ($jsonContent.Projects) {
-                foreach ($proj in $jsonContent.Projects.PSObject.Properties) {
-                    $script:Data.Projects[$proj.Name] = $proj.Value
-                }
-            }
-            
-            # Convert templates from array to hashtable
-            if ($jsonContent.Templates) {
-                foreach ($tmpl in $jsonContent.Templates.PSObject.Properties) {
-                    $script:Data.Templates[$tmpl.Name] = $tmpl.Value
-                }
-            }
-            
-            # Convert active timers
-            if ($jsonContent.ActiveTimers) {
-                foreach ($timer in $jsonContent.ActiveTimers.PSObject.Properties) {
-                    $script:Data.ActiveTimers[$timer.Name] = $timer.Value
-                }
-            }
-            
-            # Publish event after successful load
-            if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
-                Publish-Event -EventName "Data.Loaded" -Data $script:Data
-            }
-            
-            Write-Host "Data loaded successfully from $Path" -ForegroundColor Green
+        } catch {
+            Write-Warning "Failed to load data: $_"
+            Write-Warning "Using default data structure"
         }
-        catch {
-            Write-Error "Failed to load data: $_"
-            # Initialize with empty data structure
-            Initialize-EmptyData
-        }
+    } else {
+        Write-Verbose "No existing data file found at $script:DataPath"
+        # Initialize with sample data
+        Initialize-SampleData
     }
-    else {
-        Write-Host "No data file found. Creating new data structure." -ForegroundColor Yellow
-        Initialize-EmptyData
-        Save-UnifiedData
-    }
+    
+    # Sync global variable
+    $global:Data = $script:Data
 }
 
 function global:Save-UnifiedData {
-    param(
-        [string]$Path = $script:DataFilePath,
-        [switch]$CreateBackup
-    )
+    <#
+    .SYNOPSIS
+    Saves data to persistent storage with backup
+    #>
     
     try {
-        # Ensure directory exists
-        $directory = Split-Path $Path -Parent
-        if (-not (Test-Path $directory)) {
-            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        # Create backup if file exists
+        if (Test-Path $script:DataPath) {
+            $backupName = "pmc-data_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+            $backupFile = Join-Path $script:BackupPath $backupName
+            Copy-Item $script:DataPath $backupFile -Force
+            
+            # Clean old backups
+            $backups = Get-ChildItem $script:BackupPath -Filter "pmc-data_*.json" | 
+                       Sort-Object LastWriteTime -Descending
+            
+            if ($backups.Count -gt $script:Data.Settings.BackupCount) {
+                $backups | Select-Object -Skip $script:Data.Settings.BackupCount | 
+                          Remove-Item -Force
+            }
         }
         
-        # Create backup if requested or if auto-backup is enabled
-        if ($CreateBackup -or $script:Data.Settings.AutoSave) {
-            Backup-Data
-        }
+        # Save data
+        $jsonContent = $script:Data | ConvertTo-Json -Depth 10
+        Set-Content -Path $script:DataPath -Value $jsonContent -Force
         
-        # Convert hashtables to PSCustomObject for proper JSON serialization
-        $dataToSave = [PSCustomObject]@{
-            TimeEntries = $script:Data.TimeEntries
-            Tasks = $script:Data.Tasks
-            Projects = $script:Data.Projects
-            Templates = $script:Data.Templates
-            ActiveTimers = $script:Data.ActiveTimers
-            CommandSnippets = $script:Data.CommandSnippets
-            Settings = $script:Data.Settings
-            LastSaved = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-        }
+        $script:LastSaveTime = Get-Date
+        $script:DataModified = $false
         
-        # Save to file
-        $dataToSave | ConvertTo-Json -Depth 10 | Set-Content -Path $Path -Encoding UTF8
+        Write-Verbose "Data saved to $script:DataPath"
         
-        # Publish event after successful save
-        if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
-            Publish-Event -EventName "Data.Saved"
-        }
+        # Publish event
+        Publish-Event -EventName "Data.Saved" -Data @{ Path = $script:DataPath }
         
-        Write-Verbose "Data saved successfully to $Path"
-    }
-    catch {
+    } catch {
         Write-Error "Failed to save data: $_"
-        throw
+        Publish-Event -EventName "Data.SaveError" -Data @{ Error = $_.ToString() }
     }
 }
 
 function global:Initialize-DataEventHandlers {
+    <#
+    .SYNOPSIS
+    Sets up event handlers for data operations
+    #>
+    
     # Time Entry Creation
     Subscribe-Event -EventName "Data.Create.TimeEntry" -Handler {
         param($EventData)
         $data = $EventData.Data
         
-        # Validation
-        if (-not $data.Project) {
-            Publish-Event -EventName "Notification.Show" -Data @{ Text = "Project is required"; Type = "Error" }
-            return
+        try {
+            # Validate required fields
+            if (-not $data.Project) { throw "Project is required" }
+            if (-not $data.Hours -or $data.Hours -le 0) { throw "Valid hours required" }
+            
+            $newEntry = @{
+                Id = New-Guid
+                ProjectKey = $data.Project
+                Hours = [double]$data.Hours
+                Description = $data.Description ?? ""
+                Date = $data.Date ?? (Get-Date).ToString("yyyy-MM-dd")
+                EnteredAt = (Get-Date).ToString("o")
+                TaskId = $data.TaskId
+            }
+            
+            $script:Data.TimeEntries += $newEntry
+            $script:DataModified = $true
+            
+            if ($script:Data.Settings.AutoSave) {
+                Save-UnifiedData
+            }
+            
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Time entry saved: $($data.Hours)h for $($data.Project)"
+                Type = "Success" 
+            }
+            
+            Publish-Event -EventName "Data.TimeEntry.Created" -Data @{ Entry = $newEntry }
+            
+        } catch {
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Failed to create time entry: $_"
+                Type = "Error" 
+            }
         }
-        
-        # Create new entry
-        $newEntry = @{
-            Id = New-Guid
-            ProjectKey = $data.Project
-            Hours = [double]$data.Hours
-            Description = $data.Description
-            Date = $data.Date ?? (Get-Date).ToString("yyyy-MM-dd")
-            EnteredAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-        }
-        
-        $script:Data.TimeEntries += $newEntry
-        Save-UnifiedData
-        
-        Publish-Event -EventName "Notification.Show" -Data @{ Text = "Time Entry Saved!"; Type = "Success" }
-        Publish-Event -EventName "Navigation.PopScreen"
     }
     
     # Project Creation
@@ -166,25 +183,47 @@ function global:Initialize-DataEventHandlers {
         param($EventData)
         $data = $EventData.Data
         
-        if ($script:Data.Projects.ContainsKey($data.Key)) {
-            Publish-Event -EventName "Notification.Show" -Data @{ Text = "Project key already exists"; Type = "Error" }
-            return
+        try {
+            if (-not $data.Key) { throw "Project key is required" }
+            if (-not $data.Name) { throw "Project name is required" }
+            
+            if ($script:Data.Projects.ContainsKey($data.Key)) {
+                throw "Project key '$($data.Key)' already exists"
+            }
+            
+            $newProject = @{
+                Key = $data.Key
+                Name = $data.Name
+                Client = $data.Client ?? ""
+                BillingType = $data.BillingType ?? "NonBillable"
+                Rate = [double]($data.Rate ?? 0)
+                Budget = [double]($data.Budget ?? 0)
+                Id1 = $data.Id1 ?? ""
+                Id2 = $data.Id2 ?? ""
+                CreatedAt = (Get-Date).ToString("o")
+                Active = $true
+            }
+            
+            $script:Data.Projects[$data.Key] = $newProject
+            $script:DataModified = $true
+            
+            if ($script:Data.Settings.AutoSave) {
+                Save-UnifiedData
+            }
+            
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Project created: $($data.Name)"
+                Type = "Success" 
+            }
+            
+            Publish-Event -EventName "Data.Project.Created" -Data @{ Project = $newProject }
+            
+        } catch {
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Failed to create project: $_"
+                Type = "Error" 
+            }
         }
-        
-        $script:Data.Projects[$data.Key] = @{
-            Name = $data.Name
-            Client = $data.Client
-            BillingType = $data.BillingType ?? "Billable"
-            Rate = [double]($data.Rate ?? 0)
-            Budget = [double]($data.Budget ?? 0)
-            Id1 = $data.Id1
-            Id2 = $data.Id2
-            CreatedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-        }
-        
-        Save-UnifiedData
-        Publish-Event -EventName "Notification.Show" -Data @{ Text = "Project Created!"; Type = "Success" }
-        Publish-Event -EventName "Navigation.PopScreen"
     }
     
     # Task Creation
@@ -192,22 +231,41 @@ function global:Initialize-DataEventHandlers {
         param($EventData)
         $data = $EventData.Data
         
-        $newTask = @{
-            Id = New-Guid
-            ProjectKey = $data.ProjectKey
-            Description = $data.Description
-            Priority = $data.Priority ?? "Medium"
-            DueDate = $data.DueDate
-            Category = $data.Category
-            Completed = $false
-            CreatedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        try {
+            if (-not $data.Description) { throw "Task description is required" }
+            
+            $newTask = @{
+                Id = New-Guid
+                Description = $data.Description
+                ProjectKey = $data.ProjectKey
+                Priority = $data.Priority ?? "Medium"
+                DueDate = $data.DueDate
+                Tags = @($data.Tags ?? @())
+                Completed = $false
+                CreatedAt = (Get-Date).ToString("o")
+                Progress = 0
+            }
+            
+            $script:Data.Tasks += $newTask
+            $script:DataModified = $true
+            
+            if ($script:Data.Settings.AutoSave) {
+                Save-UnifiedData
+            }
+            
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Task created: $($data.Description)"
+                Type = "Success" 
+            }
+            
+            Publish-Event -EventName "Data.Task.Created" -Data @{ Task = $newTask }
+            
+        } catch {
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Failed to create task: $_"
+                Type = "Error" 
+            }
         }
-        
-        $script:Data.Tasks += $newTask
-        Save-UnifiedData
-        
-        Publish-Event -EventName "Notification.Show" -Data @{ Text = "Task Created!"; Type = "Success" }
-        Publish-Event -EventName "Navigation.PopScreen"
     }
     
     # Timer Start
@@ -215,165 +273,219 @@ function global:Initialize-DataEventHandlers {
         param($EventData)
         $data = $EventData.Data
         
-        $timerKey = "$($data.ProjectKey)_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
-        $script:Data.ActiveTimers[$timerKey] = @{
-            ProjectKey = $data.ProjectKey
-            TaskId = $data.TaskId
-            Description = $data.Description
-            StartTime = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        try {
+            if (-not $data.ProjectKey) { throw "Project is required to start timer" }
+            
+            $timerKey = "$($data.ProjectKey)_$(Get-Date -Format 'yyyyMMddHHmmss')"
+            
+            $newTimer = @{
+                Key = $timerKey
+                ProjectKey = $data.ProjectKey
+                TaskId = $data.TaskId
+                Description = $data.Description ?? ""
+                StartTime = (Get-Date).ToString("o")
+            }
+            
+            $script:Data.ActiveTimers[$timerKey] = $newTimer
+            $script:DataModified = $true
+            
+            if ($script:Data.Settings.AutoSave) {
+                Save-UnifiedData
+            }
+            
+            $project = $script:Data.Projects[$data.ProjectKey]
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Timer started for: $($project.Name)"
+                Type = "Success" 
+            }
+            
+            Publish-Event -EventName "Data.Timer.Started" -Data @{ Timer = $newTimer }
+            
+        } catch {
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Failed to start timer: $_"
+                Type = "Error" 
+            }
         }
-        
-        Save-UnifiedData
-        Publish-Event -EventName "Notification.Show" -Data @{ Text = "Timer Started!"; Type = "Success" }
-        Publish-Event -EventName "Data.Timer.Started" -Data @{ TimerKey = $timerKey }
     }
     
     # Timer Stop
     Subscribe-Event -EventName "Data.Timer.Stop" -Handler {
         param($EventData)
-        $timerKey = $EventData.Data.TimerKey
+        $data = $EventData.Data
         
-        if ($script:Data.ActiveTimers.ContainsKey($timerKey)) {
-            $timer = $script:Data.ActiveTimers[$timerKey]
-            $startTime = [DateTime]::Parse($timer.StartTime)
+        try {
+            if (-not $data.TimerKey) { throw "Timer key is required" }
+            
+            if (-not $script:Data.ActiveTimers.ContainsKey($data.TimerKey)) {
+                throw "Timer not found: $($data.TimerKey)"
+            }
+            
+            $timer = $script:Data.ActiveTimers[$data.TimerKey]
+            $startTime = [DateTime]$timer.StartTime
             $elapsed = (Get-Date) - $startTime
             
             # Create time entry from timer
-            $newEntry = @{
+            $timeEntry = @{
                 Id = New-Guid
                 ProjectKey = $timer.ProjectKey
                 Hours = [Math]::Round($elapsed.TotalHours, 2)
-                Description = $timer.Description ?? "Timer entry"
-                Date = (Get-Date).ToString("yyyy-MM-dd")
-                EnteredAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                Description = $timer.Description
+                Date = $startTime.ToString("yyyy-MM-dd")
+                EnteredAt = (Get-Date).ToString("o")
+                TaskId = $timer.TaskId
                 FromTimer = $true
             }
             
-            $script:Data.TimeEntries += $newEntry
-            $script:Data.ActiveTimers.Remove($timerKey)
+            $script:Data.TimeEntries += $timeEntry
+            $script:Data.ActiveTimers.Remove($data.TimerKey)
+            $script:DataModified = $true
             
-            Save-UnifiedData
-            Publish-Event -EventName "Notification.Show" -Data @{ Text = "Timer stopped. Time entry created: $($newEntry.Hours)h"; Type = "Success" }
-            Publish-Event -EventName "Data.Timer.Stopped" -Data @{ TimerKey = $timerKey; Entry = $newEntry }
+            if ($script:Data.Settings.AutoSave) {
+                Save-UnifiedData
+            }
+            
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Timer stopped: $([Math]::Round($elapsed.TotalHours, 2))h recorded"
+                Type = "Success" 
+            }
+            
+            Publish-Event -EventName "Data.Timer.Stopped" -Data @{ 
+                Timer = $timer
+                TimeEntry = $timeEntry 
+            }
+            
+        } catch {
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Failed to stop timer: $_"
+                Type = "Error" 
+            }
         }
     }
     
     # Stop All Timers
     Subscribe-Event -EventName "Data.Timer.StopAll" -Handler {
-        $stoppedCount = 0
-        $timerKeys = @($script:Data.ActiveTimers.Keys)
+        param($EventData)
         
+        $timerKeys = @($script:Data.ActiveTimers.Keys)
         foreach ($timerKey in $timerKeys) {
             Publish-Event -EventName "Data.Timer.Stop" -Data @{ TimerKey = $timerKey }
-            $stoppedCount++
         }
-        
-        if ($stoppedCount -gt 0) {
-            Publish-Event -EventName "Notification.Show" -Data @{ Text = "Stopped $stoppedCount timer(s)"; Type = "Success" }
-        }
-    }
-    
-    # Task Update
-    Subscribe-Event -EventName "Data.Update.Task" -Handler {
-        param($EventData)
-        $data = $EventData.Data
-        
-        $task = $script:Data.Tasks | Where-Object { $_.Id -eq $data.TaskId } | Select-Object -First 1
-        if ($task) {
-            # Update properties
-            foreach ($prop in $data.Updates.PSObject.Properties) {
-                $task.($prop.Name) = $prop.Value
-            }
-            
-            Save-UnifiedData
-            Publish-Event -EventName "Notification.Show" -Data @{ Text = "Task Updated!"; Type = "Success" }
-        }
-    }
-    
-    # Project Update
-    Subscribe-Event -EventName "Data.Update.Project" -Handler {
-        param($EventData)
-        $data = $EventData.Data
-        
-        if ($script:Data.Projects.ContainsKey($data.ProjectKey)) {
-            $project = $script:Data.Projects[$data.ProjectKey]
-            
-            # Update properties
-            foreach ($prop in $data.Updates.PSObject.Properties) {
-                $project[$prop.Name] = $prop.Value
-            }
-            
-            Save-UnifiedData
-            Publish-Event -EventName "Notification.Show" -Data @{ Text = "Project Updated!"; Type = "Success" }
-        }
-    }
-}
-
-function Initialize-EmptyData {
-    $script:Data = @{
-        TimeEntries = @()
-        Tasks = @()
-        Projects = @{}
-        Templates = @{}
-        ActiveTimers = @{}
-        CommandSnippets = @()
-        Settings = @{
-            Theme = "Default"
-            AutoSave = $true
-            BackupRetentionDays = 7
-        }
-    }
-}
-
-function Backup-Data {
-    try {
-        $backupDir = Join-Path (Split-Path $script:DataFilePath -Parent) "backups"
-        if (-not (Test-Path $backupDir)) {
-            New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-        }
-        
-        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $backupPath = Join-Path $backupDir "pmc-data_backup_$timestamp.json"
-        
-        Copy-Item -Path $script:DataFilePath -Destination $backupPath -Force
-        
-        # Clean old backups
-        $retentionDays = $script:Data.Settings.BackupRetentionDays
-        $cutoffDate = (Get-Date).AddDays(-$retentionDays)
-        Get-ChildItem -Path $backupDir -Filter "pmc-data_backup_*.json" | 
-            Where-Object { $_.CreationTime -lt $cutoffDate } | 
-            Remove-Item -Force
-            
-        Write-Verbose "Backup created: $backupPath"
-    }
-    catch {
-        Write-Warning "Failed to create backup: $_"
     }
 }
 
 function global:Get-ProjectOrTemplate {
-    param([string]$Key)
+    <#
+    .SYNOPSIS
+    Gets a project or template by key
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Key
+    )
     
     if ($script:Data.Projects.ContainsKey($Key)) {
         return $script:Data.Projects[$Key]
-    }
-    elseif ($script:Data.Templates.ContainsKey($Key)) {
-        return $script:Data.Templates[$Key]
-    }
-    else {
-        return $null
+    } elseif ($script:Data.TodoTemplates.ContainsKey($Key)) {
+        return $script:Data.TodoTemplates[$Key]
+    } else {
+        return @{ 
+            Key = $Key
+            Name = $Key
+            Client = ""
+            BillingType = "NonBillable"
+            Rate = 0
+        }
     }
 }
 
 function global:New-Guid {
-    return [System.Guid]::NewGuid().ToString()
+    <#
+    .SYNOPSIS
+    Generates a new unique identifier
+    #>
+    return [Guid]::NewGuid().ToString()
 }
 
-# Export module members
+function Initialize-SampleData {
+    <#
+    .SYNOPSIS
+    Initializes sample data for first-time users
+    #>
+    
+    # Sample projects
+    $script:Data.Projects["INTERNAL"] = @{
+        Key = "INTERNAL"
+        Name = "Internal Work"
+        Client = "Company"
+        BillingType = "NonBillable"
+        Rate = 0
+        Budget = 0
+        Active = $true
+        CreatedAt = (Get-Date).ToString("o")
+    }
+    
+    $script:Data.Projects["SAMPLE"] = @{
+        Key = "SAMPLE"
+        Name = "Sample Project"
+        Client = "Sample Client"
+        BillingType = "Billable"
+        Rate = 100
+        Budget = 10000
+        Active = $true
+        CreatedAt = (Get-Date).ToString("o")
+    }
+    
+    # Sample todo templates
+    $script:Data.TodoTemplates["PERSONAL"] = @{
+        Key = "PERSONAL"
+        Name = "Personal Tasks"
+        Client = ""
+        BillingType = "NonBillable"
+        Rate = 0
+        IsTemplate = $true
+    }
+    
+    Write-Verbose "Sample data initialized"
+}
+
+# Helper function to get week dates
+function global:Get-WeekDates {
+    param([DateTime]$Date)
+    
+    $monday = $Date.AddDays(1 - [int]$Date.DayOfWeek)
+    if ($Date.DayOfWeek -eq [DayOfWeek]::Sunday) {
+        $monday = $monday.AddDays(-7)
+    }
+    
+    return @(
+        @{ Name = "Monday"; Date = $monday.Date }
+        @{ Name = "Tuesday"; Date = $monday.AddDays(1).Date }
+        @{ Name = "Wednesday"; Date = $monday.AddDays(2).Date }
+        @{ Name = "Thursday"; Date = $monday.AddDays(3).Date }
+        @{ Name = "Friday"; Date = $monday.AddDays(4).Date }
+    )
+}
+
+function global:Get-WeekStart {
+    param([DateTime]$Date)
+    
+    $monday = $Date.AddDays(1 - [int]$Date.DayOfWeek)
+    if ($Date.DayOfWeek -eq [DayOfWeek]::Sunday) {
+        $monday = $monday.AddDays(-7)
+    }
+    
+    return $monday.Date
+}
+
+# Export functions
 Export-ModuleMember -Function @(
+    'Initialize-DataManager',
     'Load-UnifiedData',
     'Save-UnifiedData',
     'Initialize-DataEventHandlers',
     'Get-ProjectOrTemplate',
-    'New-Guid'
+    'New-Guid',
+    'Get-WeekDates',
+    'Get-WeekStart'
 ) -Variable @('Data')

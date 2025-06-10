@@ -1,4 +1,5 @@
-# Dashboard Screen Module - Central hub for PMC Terminal
+# Dashboard Screen Module
+# Main dashboard for PMC Terminal
 
 function global:Get-DashboardScreen {
     $dashboardScreen = @{
@@ -18,10 +19,6 @@ function global:Get-DashboardScreen {
                 $self.RefreshActiveTimers()
                 Request-TuiRefresh
             }
-            Subscribe-Event -EventName "Data.Timer.Stopped" -Handler {
-                $self.RefreshActiveTimers()
-                Request-TuiRefresh
-            }
             Subscribe-Event -EventName "Data.TimeEntry.Created" -Handler {
                 $self.RefreshRecentEntries()
                 Request-TuiRefresh
@@ -32,9 +29,9 @@ function global:Get-DashboardScreen {
         Render = {
             param($self)
             
-            # Header with current time and active timer indicator
+            # Header with current time
             $headerY = 2
-            Write-BufferString -X 2 -Y $headerY -Text "PMC Terminal - $(Get-Date -Format 'dddd, MMMM dd, yyyy HH:mm')" -ForegroundColor (Get-ThemeColor "Header")
+            Write-BufferString -X 2 -Y $headerY -Text "PMC Terminal v3.0 - $(Get-Date -Format 'dddd, MMMM dd, yyyy HH:mm')" -ForegroundColor (Get-ThemeColor "Header")
             
             if ($self.State.ActiveTimers.Count -gt 0) {
                 $timerText = "🔴 TIMER ACTIVE"
@@ -67,7 +64,7 @@ function global:Get-DashboardScreen {
             
             # Status bar
             $statusY = $script:TuiState.BufferHeight - 2
-            Write-BufferString -X 2 -Y $statusY -Text "Navigation: ↑↓ Select • Enter: Execute • Tab: Switch Sections • P: Command Palette • Q: Quit" -ForegroundColor (Get-ThemeColor "Subtle")
+            Write-BufferString -X 2 -Y $statusY -Text "Navigation: ↑↓ Select • Enter: Execute • P: Command Palette • Q: Quit" -ForegroundColor (Get-ThemeColor "Subtle")
         }
         
         HandleInput = {
@@ -88,8 +85,10 @@ function global:Get-DashboardScreen {
                     return $true
                 }
                 ([ConsoleKey]::P) {
-                    if (Get-Command -Name "Get-CommandPaletteScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-CommandPaletteScreen)
+                    # Command palette would go here
+                    Publish-Event -EventName "Notification.Show" -Data @{ 
+                        Text = "Command Palette not yet implemented"
+                        Type = "Info" 
                     }
                     return $true
                 }
@@ -100,12 +99,12 @@ function global:Get-DashboardScreen {
         
         # Helper methods for data management
         RefreshActiveTimers = {
-            $this.State.ActiveTimers = @($script:Data.ActiveTimers.GetEnumerator())
+            $this.State.ActiveTimers = @($Data.ActiveTimers.GetEnumerator())
         }
         
         RefreshTodaysTasks = {
             $today = (Get-Date).ToString("yyyy-MM-dd")
-            $this.State.TodaysTasks = @($script:Data.Tasks | Where-Object { 
+            $this.State.TodaysTasks = @($Data.Tasks | Where-Object { 
                 (-not $_.Completed) -and (
                     [string]::IsNullOrEmpty($_.DueDate) -or $_.DueDate -eq $today
                 )
@@ -113,19 +112,19 @@ function global:Get-DashboardScreen {
         }
         
         RefreshRecentEntries = {
-            $this.State.RecentEntries = @($script:Data.TimeEntries | 
+            $this.State.RecentEntries = @($Data.TimeEntries | 
                 Sort-Object Date, EnteredAt -Descending | 
                 Select-Object -First 5)
         }
         
         RefreshQuickStats = {
             $today = (Get-Date).ToString("yyyy-MM-dd")
-            $todayEntries = $script:Data.TimeEntries | Where-Object { $_.Date -eq $today }
+            $todayEntries = $Data.TimeEntries | Where-Object { $_.Date -eq $today }
             $this.State.QuickStats = @{
                 TodayHours = ($todayEntries | Measure-Object -Property Hours -Sum).Sum
-                ActiveTasks = ($script:Data.Tasks | Where-Object { -not $_.Completed }).Count
-                ActiveProjects = ($script:Data.Projects.Keys).Count
-                RunningTimers = $script:Data.ActiveTimers.Count
+                ActiveTasks = ($Data.Tasks | Where-Object { -not $_.Completed }).Count
+                ActiveProjects = ($Data.Projects.Keys).Count
+                RunningTimers = $Data.ActiveTimers.Count
             }
         }
         
@@ -139,38 +138,39 @@ function global:Get-DashboardScreen {
         GetQuickActions = {
             return @(
                 @{ Name = "📝 Add Time Entry"; Action = { 
-                    if (Get-Command -Name "Get-TimeEntryFormScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-TimeEntryFormScreen) 
+                    Publish-Event -EventName "Notification.Show" -Data @{ 
+                        Text = "Time Entry screen not yet implemented"
+                        Type = "Info" 
                     }
                 }}
                 @{ Name = "⏱️  Start Timer"; Action = { 
-                    if (Get-Command -Name "Get-TimerStartScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-TimerStartScreen) 
+                    Publish-Event -EventName "Notification.Show" -Data @{ 
+                        Text = "Timer screen not yet implemented"
+                        Type = "Info" 
                     }
                 }}
                 @{ Name = "📋 Add Task"; Action = { 
-                    if (Get-Command -Name "Get-TaskFormScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-TaskFormScreen) 
+                    Publish-Event -EventName "Notification.Show" -Data @{ 
+                        Text = "Task screen not yet implemented"
+                        Type = "Info" 
                     }
                 }}
                 @{ Name = "🏗️  Manage Projects"; Action = { 
-                    if (Get-Command -Name "Get-ProjectManagementScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-ProjectManagementScreen) 
+                    Publish-Event -EventName "Notification.Show" -Data @{ 
+                        Text = "Projects screen not yet implemented"
+                        Type = "Info" 
                     }
                 }}
                 @{ Name = "📊 Reports"; Action = { 
-                    if (Get-Command -Name "Get-ReportsMenuScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-ReportsMenuScreen) 
-                    }
-                }}
-                @{ Name = "📁 File Browser"; Action = { 
-                    if (Get-Command -Name "Start-TerminalFileBrowser" -ErrorAction SilentlyContinue) {
-                        Start-TerminalFileBrowser 
+                    Publish-Event -EventName "Notification.Show" -Data @{ 
+                        Text = "Reports screen not yet implemented"
+                        Type = "Info" 
                     }
                 }}
                 @{ Name = "🎨 Settings"; Action = { 
-                    if (Get-Command -Name "Get-SettingsScreen" -ErrorAction SilentlyContinue) {
-                        Push-Screen -Screen (Get-SettingsScreen) 
+                    Publish-Event -EventName "Notification.Show" -Data @{ 
+                        Text = "Settings screen not yet implemented"
+                        Type = "Info" 
                     }
                 }}
             )
@@ -196,14 +196,9 @@ function global:Get-DashboardScreen {
                 foreach ($timer in $this.State.ActiveTimers) {
                     $elapsed = (Get-Date) - [DateTime]$timer.Value.StartTime
                     $project = Get-ProjectOrTemplate $timer.Value.ProjectKey
-                    if ($project) {
-                        Write-BufferString -X $x -Y $currentY -Text "$($project.Name)" -ForegroundColor (Get-ThemeColor "Info")
-                    } else {
-                        Write-BufferString -X $x -Y $currentY -Text "Unknown Project" -ForegroundColor (Get-ThemeColor "Error")
-                    }
+                    Write-BufferString -X $x -Y $currentY -Text "$($project.Name)" -ForegroundColor (Get-ThemeColor "Info")
                     Write-BufferString -X $x -Y ($currentY + 1) -Text "  $([Math]::Floor($elapsed.TotalHours)):$($elapsed.ToString('mm\:ss'))" -ForegroundColor (Get-ThemeColor "Accent")
                     $currentY += 2
-                    if ($currentY -ge ($y + 5)) { break }  # Limit display
                 }
             }
         }
@@ -226,7 +221,6 @@ function global:Get-DashboardScreen {
                     if ($taskText.Length -gt 22) { $taskText = $taskText.Substring(0, 19) + "..." }
                     Write-BufferString -X $x -Y $currentY -Text $taskText -ForegroundColor (Get-ThemeColor "Primary")
                     $currentY++
-                    if ($currentY -ge ($y + 4)) { break }  # Limit display
                 }
             }
         }
@@ -241,11 +235,8 @@ function global:Get-DashboardScreen {
                     $project = Get-ProjectOrTemplate $entry.ProjectKey
                     $entryText = "$($entry.Date): $($entry.Hours)h"
                     Write-BufferString -X $x -Y $currentY -Text $entryText -ForegroundColor (Get-ThemeColor "Success")
-                    if ($project) {
-                        Write-BufferString -X ($x + 2) -Y ($currentY + 1) -Text $project.Name -ForegroundColor (Get-ThemeColor "Subtle")
-                    }
+                    Write-BufferString -X ($x + 2) -Y ($currentY + 1) -Text $project.Name -ForegroundColor (Get-ThemeColor "Subtle")
                     $currentY += 2
-                    if ($currentY -ge ($y + 7)) { break }  # Limit display
                 }
             }
         }
@@ -261,5 +252,5 @@ function global:Get-DashboardScreen {
     return $dashboardScreen
 }
 
-# Export module members
+# Export the function
 Export-ModuleMember -Function 'Get-DashboardScreen'

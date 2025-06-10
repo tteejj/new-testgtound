@@ -1,130 +1,187 @@
 # PMC Terminal v3.0 - Main Entry Point
-# This file orchestrates module loading and application initialization
+# This file orchestrates module loading and application startup
 
-# Set strict mode
+# Set strict mode for better error handling
 Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
 
-# Get script root
-$script:AppRoot = $PSScriptRoot
+# Get the directory where this script is located
+$script:BasePath = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# Import modules in correct order
-Write-Host "Loading PMC Terminal v3.0..." -ForegroundColor Cyan
-
-# Core engine modules
-Import-Module (Join-Path $script:AppRoot "modules\tui-engine-v2.psm1") -Force
-Import-Module (Join-Path $script:AppRoot "modules\event-system.psm1") -Force
-Import-Module (Join-Path $script:AppRoot "modules\data-manager.psm1") -Force
-Import-Module (Join-Path $script:AppRoot "modules\dialog-system.psm1") -Force
-Import-Module (Join-Path $script:AppRoot "modules\theme-manager.psm1") -Force
-
-# UI Components
-Import-Module (Join-Path $script:AppRoot "components\tui-components.psm1") -Force
-
-# Utility modules
-$utilityModules = @(
-    "file-browser.psm1",
-    "fuzzy-search.psm1", 
-    "command-palette.psm1",
-    "core-utilities.psm1"
+# Module loading order is critical - dependencies must load first
+$script:ModulesToLoad = @(
+    # Core infrastructure (order matters!)
+    @{ Name = "event-system"; Path = "modules\event-system.psm1"; Required = $true }
+    @{ Name = "data-manager"; Path = "modules\data-manager.psm1"; Required = $true }
+    @{ Name = "theme-manager"; Path = "modules\theme-manager.psm1"; Required = $true }
+    @{ Name = "tui-engine-v2"; Path = "modules\tui-engine-v2.psm1"; Required = $true }
+    @{ Name = "dialog-system"; Path = "modules\dialog-system.psm1"; Required = $true }
+    
+    # Components
+    @{ Name = "tui-components"; Path = "components\tui-components.psm1"; Required = $true }
+    
+    # Utilities (optional)
+    @{ Name = "file-browser"; Path = "utilities\file-browser.psm1"; Required = $false }
+    @{ Name = "fuzzy-search"; Path = "utilities\fuzzy-search.psm1"; Required = $false }
+    @{ Name = "command-palette"; Path = "utilities\command-palette.psm1"; Required = $false }
+    @{ Name = "core-utilities"; Path = "utilities\core-utilities.psm1"; Required = $false }
 )
-foreach ($module in $utilityModules) {
-    $modulePath = Join-Path $script:AppRoot "utilities\$module"
-    if (Test-Path $modulePath) {
-        Import-Module $modulePath -Force
+
+# Screen modules will be loaded dynamically
+$script:ScreenModules = @(
+    "dashboard-screen",
+    "time-entry-screen",
+    "task-management-screen",
+    "project-management-screen",
+    "timer-management-screen",
+    "reports-screen",
+    "settings-screen"
+)
+
+function Initialize-PMCModules {
+    Write-Host "Initializing PMC Terminal v3.0..." -ForegroundColor Cyan
+    
+    $loadedModules = @()
+    
+    foreach ($module in $script:ModulesToLoad) {
+        $modulePath = Join-Path $script:BasePath $module.Path
+        
+        try {
+            if (Test-Path $modulePath) {
+                Write-Host "  Loading $($module.Name)..." -ForegroundColor Gray
+                Import-Module $modulePath -Force -Global -ErrorAction Stop
+                $loadedModules += $module.Name
+            } elseif ($module.Required) {
+                throw "Required module not found: $($module.Name) at $modulePath"
+            } else {
+                Write-Host "  Optional module not found: $($module.Name)" -ForegroundColor Yellow
+            }
+        } catch {
+            if ($module.Required) {
+                throw "Failed to load required module $($module.Name): $_"
+            } else {
+                Write-Host "  Failed to load optional module $($module.Name): $_" -ForegroundColor Yellow
+            }
+        }
     }
+    
+    Write-Host "Loaded $($loadedModules.Count) modules successfully" -ForegroundColor Green
+    return $loadedModules
 }
 
-# Screen modules
-$screenModules = @(
-    "dashboard-screen.psm1",
-    "time-entry-screen.psm1",
-    "task-management-screen.psm1",
-    "project-management-screen.psm1",
-    "timer-management-screen.psm1",
-    "reports-screen.psm1",
-    "settings-screen.psm1"
-)
-foreach ($module in $screenModules) {
-    $modulePath = Join-Path $script:AppRoot "screens\$module"
-    if (Test-Path $modulePath) {
-        Import-Module $modulePath -Force
+function Initialize-PMCScreens {
+    Write-Host "Loading screens..." -ForegroundColor Cyan
+    
+    $loadedScreens = @()
+    
+    foreach ($screenName in $script:ScreenModules) {
+        $screenPath = Join-Path $script:BasePath "screens\$screenName.psm1"
+        
+        try {
+            if (Test-Path $screenPath) {
+                Import-Module $screenPath -Force -Global -ErrorAction SilentlyContinue
+                $loadedScreens += $screenName
+            } else {
+                Write-Host "  Screen module not found: $screenName" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "  Failed to load screen: $screenName - $_" -ForegroundColor Yellow
+        }
     }
+    
+    Write-Host "Loaded $($loadedScreens.Count) screens" -ForegroundColor Green
+    return $loadedScreens
 }
 
-# Initialize application
 function Start-PMCTerminal {
     try {
-        # Initialize core systems
-        Initialize-TuiEngine
-        Initialize-EventSystem
-        Initialize-ThemeManager
-        Initialize-DialogSystem
+        # Initialize core modules
+        $loadedModules = Initialize-PMCModules
         
-        # Load application data
+        # Initialize subsystems in correct order
+        Write-Host "`nInitializing subsystems..." -ForegroundColor Cyan
+        
+        # 1. Event System (must be first)
+        Write-Host "  Initializing Event System..." -ForegroundColor Gray
+        Initialize-EventSystem
+        
+        # 2. Theme Manager
+        Write-Host "  Initializing Theme Manager..." -ForegroundColor Gray
+        Initialize-ThemeManager
+        Set-TuiTheme -ThemeName "Modern"
+        
+        # 3. Data Manager (needs event system)
+        Write-Host "  Initializing Data Manager..." -ForegroundColor Gray
+        Initialize-DataManager
         Load-UnifiedData
         
-        # Initialize event handlers
-        Initialize-DataEventHandlers
+        # 4. Dialog System (needs event system)
+        Write-Host "  Initializing Dialog System..." -ForegroundColor Gray
+        Initialize-DialogSystem
         
-        # Start with dashboard screen
-        $dashboardScreen = Get-DashboardScreen
-        Push-Screen -Screen $dashboardScreen
+        # 5. TUI Engine (needs all the above)
+        Write-Host "  Initializing TUI Engine..." -ForegroundColor Gray
+        Initialize-TuiEngine
         
-        # Run the main loop
+        # Load screens after core systems are ready
+        Initialize-PMCScreens
+        
+        # Create and push the dashboard screen
+        Write-Host "`nStarting application..." -ForegroundColor Green
+        
+        # Check if dashboard screen function exists
+        if (Get-Command -Name "Get-DashboardScreen" -ErrorAction SilentlyContinue) {
+            $dashboardScreen = Get-DashboardScreen
+            Push-Screen -Screen $dashboardScreen
+        } else {
+            # Fallback to a simple welcome screen
+            Write-Host "Dashboard screen not found, using fallback..." -ForegroundColor Yellow
+            $welcomeScreen = @{
+                Name = "WelcomeScreen"
+                State = @{}
+                Render = {
+                    Write-BufferBox -X 10 -Y 5 -Width 60 -Height 15 -Title " PMC Terminal v3.0 " -BorderColor "Cyan"
+                    Write-BufferString -X 15 -Y 8 -Text "Welcome to PMC Terminal!" -ForegroundColor "White"
+                    Write-BufferString -X 15 -Y 10 -Text "Dashboard screen is being loaded..." -ForegroundColor "Gray"
+                    Write-BufferString -X 15 -Y 12 -Text "Press Q to quit" -ForegroundColor "Yellow"
+                }
+                HandleInput = {
+                    param($self, $Key)
+                    if ($Key.Key -eq [ConsoleKey]::Q) { return "Quit" }
+                    return $false
+                }
+            }
+            Push-Screen -Screen $welcomeScreen
+        }
+        
+        # Start the main TUI loop
         Start-TuiLoop
         
-        # Cleanup on exit
-        Write-Host "`nThank you for using PMC Terminal!" -ForegroundColor Green
-    }
-    catch {
-        Write-Error "Fatal error: $_"
-        Write-Host $_.ScriptStackTrace -ForegroundColor Red
-    }
-    finally {
-        # Ensure data is saved
-        if ($script:Data) {
-            Save-UnifiedData
+    } catch {
+        Write-Error "FATAL: Failed to initialize PMC Terminal: $_"
+        throw
+    } finally {
+        # Cleanup
+        if (Get-Command -Name "Stop-TuiEngine" -ErrorAction SilentlyContinue) {
+            Write-Host "`nShutting down..." -ForegroundColor Yellow
+            Stop-TuiEngine
         }
         
-        # Restore console
-        if (Get-Command -Name "Restore-TuiState" -ErrorAction SilentlyContinue) {
-            Restore-TuiState
+        # Save data if loaded
+        if ($Data -and (Get-Command -Name "Save-UnifiedData" -ErrorAction SilentlyContinue)) {
+            Write-Host "Saving data..." -ForegroundColor Yellow
+            Save-UnifiedData
         }
     }
 }
 
-# Check for command line arguments
-if ($args.Count -gt 0) {
-    switch ($args[0].ToLower()) {
-        "backup" {
-            Load-UnifiedData
-            Backup-Data
-            Write-Host "Backup completed successfully!" -ForegroundColor Green
-            exit
-        }
-        "export" {
-            Load-UnifiedData
-            # Export functionality to be implemented
-            Write-Host "Export functionality coming soon!" -ForegroundColor Yellow
-            exit
-        }
-        "help" {
-            Write-Host @"
-PMC Terminal v3.0 - Project Management Console
-
-Usage: .\main.ps1 [command]
-
-Commands:
-  (none)    Start the interactive TUI
-  backup    Create a backup of the data file
-  export    Export data (coming soon)
-  help      Show this help message
-
-"@ -ForegroundColor Cyan
-            exit
-        }
-    }
+# Entry point
+try {
+    Clear-Host
+    Start-PMCTerminal
+} catch {
+    Write-Error "Fatal error: $_"
+    Write-Host "`nPress any key to exit..." -ForegroundColor Red
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    exit 1
 }
-
-# Start the application
-Start-PMCTerminal
