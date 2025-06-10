@@ -114,27 +114,52 @@ function global:Unsubscribe-Event {
     Unsubscribes from an event
     
     .PARAMETER EventName
-    The name of the event to unsubscribe from
+    The name of the event to unsubscribe from (optional if HandlerId is provided)
     
     .PARAMETER HandlerId
     The unique identifier of the handler to remove
     #>
     param(
-        [Parameter(Mandatory = $true)]
+        [Parameter()]
         [string]$EventName,
         
         [Parameter(Mandatory = $true)]
         [string]$HandlerId
     )
     
-    if ($script:EventHandlers.ContainsKey($EventName)) {
-        $script:EventHandlers[$EventName] = @($script:EventHandlers[$EventName] | Where-Object { $_.HandlerId -ne $HandlerId })
-        
-        if ($script:EventHandlers[$EventName].Count -eq 0) {
-            $script:EventHandlers.Remove($EventName)
+    if ($EventName) {
+        # Fast path when event name is known
+        if ($script:EventHandlers.ContainsKey($EventName)) {
+            $script:EventHandlers[$EventName] = @($script:EventHandlers[$EventName] | Where-Object { $_.HandlerId -ne $HandlerId })
+            
+            if ($script:EventHandlers[$EventName].Count -eq 0) {
+                $script:EventHandlers.Remove($EventName)
+            }
+            
+            Write-Verbose "Unsubscribed from event: $EventName (Handler: $HandlerId)"
+        }
+    } else {
+        # Search all events for the handler ID
+        $found = $false
+        foreach ($eventKey in @($script:EventHandlers.Keys)) {
+            $handlers = $script:EventHandlers[$eventKey]
+            $newHandlers = @($handlers | Where-Object { $_.HandlerId -ne $HandlerId })
+            
+            if ($newHandlers.Count -lt $handlers.Count) {
+                $found = $true
+                if ($newHandlers.Count -eq 0) {
+                    $script:EventHandlers.Remove($eventKey)
+                } else {
+                    $script:EventHandlers[$eventKey] = $newHandlers
+                }
+                Write-Verbose "Unsubscribed from event: $eventKey (Handler: $HandlerId)"
+                break
+            }
         }
         
-        Write-Verbose "Unsubscribed from event: $EventName (Handler: $HandlerId)"
+        if (-not $found) {
+            Write-Warning "Handler ID not found: $HandlerId"
+        }
     }
 }
 

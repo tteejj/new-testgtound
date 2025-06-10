@@ -1,0 +1,2389 @@
+# Data Manager Module
+# Unified data persistence and CRUD operations with event integration
+
+$script:Data = @{
+    Projects = @{}
+    Tasks = @()
+    TimeEntries = @()
+    ActiveTimers = @{}
+    TodoTemplates = @{}
+    Settings = @{
+        DefaultView = "Dashboard"
+        Theme = "Modern"
+        AutoSave = $true
+        BackupCount = 5
+    }
+}
+
+$script:DataPath = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "PMCTerminal\pmc-data.json"
+$script:BackupPath = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "PMCTerminal\backups"
+$script:LastSaveTime = $null
+$script:DataModified = $false
+
+function global:Initialize-DataManager {
+    <#
+    .SYNOPSIS
+    Initializes the data management system
+    #>
+    
+    # Ensure data directory exists
+    $dataDir = Split-Path $script:DataPath -Parent
+    if (-not (Test-Path $dataDir)) {
+        New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+    }
+    
+    # Ensure backup directory exists
+    if (-not (Test-Path $script:BackupPath)) {
+        New-Item -ItemType Directory -Path $script:BackupPath -Force | Out-Null
+    }
+    
+    # Initialize event handlers
+    Initialize-DataEventHandlers
+    
+    # Make data globally accessible
+    $global:Data = $script:Data
+    
+    Write-Verbose "Data manager initialized"
+}
+
+function global:Load-UnifiedData {
+    <#
+    .SYNOPSIS
+    Loads data from the persistent storage
+    #>
+    
+    if (Test-Path $script:DataPath) {
+        try {
+            $jsonContent = Get-Content $script:DataPath -Raw
+            $loadedData = $jsonContent | ConvertFrom-Json -AsHashtable
+            
+            # Merge with default structure to ensure all keys exist
+            foreach ($key in $loadedData.Keys) {
+                $script:Data[$key] = $loadedData[$key]
+            }
+            
+            $script:LastSaveTime = (Get-Item $script:DataPath).LastWriteTime
+            Write-Verbose "Data loaded from $script:DataPath"
+            
+            # Publish event
+            Publish-Event -EventName "Data.Loaded" -Data @{ 
+                Path = $script:DataPath
+                ItemCount = @{
+                    Projects = $script:Data.Projects.Count
+                    Tasks = $script:Data.Tasks.Count
+                    TimeEntries = $script:Data.TimeEntries.Count
+                    ActiveTimers = $script:Data.ActiveTimers.Count
+                }
+            }
+        } catch {
+            Write-Warning "Failed to load data: $_"
+            Write-Warning "Using default data structure"
+        }
+    } else {
+        Write-Verbose "No existing data file found at $script:DataPath"
+        # Initialize with sample data
+        Initialize-SampleData
+    }
+    
+    # Sync global variable
+    $global:Data = $script:Data
+}
+
+function global:Save-UnifiedData {
+    <#
+    .SYNOPSIS
+    Saves data to persistent storage with backup
+    #>
+    
+    try {
+        # Create backup if file exists
+        if (Test-Path $script:DataPath) {
+            $backupName = "pmc-data_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+            $backupFile = Join-Path $script:BackupPath $backupName
+            Copy-Item $script:DataPath $backupFile -Force
+            
+            # Clean old backups
+            $backups = Get-ChildItem $script:BackupPath -Filter "pmc-data_*.json" | 
+                       Sort-Object LastWriteTime -Descending
+            
+            if ($backups.Count -gt $script:Data.Settings.BackupCount) {
+                $backups | Select-Object -Skip $script:Data.Settings.BackupCount | 
+                          Remove-Item -Force
+            }
+        }
+        
+        # Save data
+        $jsonContent = $script:Data | ConvertTo-Json -Depth 10
+        Set-Content -Path $script:DataPath -Value $jsonContent -Force
+        
+        $script:LastSaveTime = Get-Date
+        $script:DataModified = $false
+        
+        Write-Verbose "Data saved to $script:DataPath"
+        
+        # Publish event
+        Publish-Event -EventName "Data.Saved" -Data @{ Path = $script:DataPath }
+        
+    } catch {
+        Write-Error "Failed to save data: $_"
+        Publish-Event -EventName "Data.SaveError" -Data @{ Error = $_.ToString() }
+    }
+}
+
+function global:Initialize-DataEventHandlers {
+    <#
+    .SYNOPSIS
+    Sets up event handlers for data operations
+    #>
+    
+    # Time Entry Creation
+    Subscribe-Event -EventName "Data.Create.TimeEntry" -Handler {
+        param($EventData)
+        $data = $EventData.Data
+        
+        try {
+            # Validate required fields
+            if (-not $data.Project) { throw "Project is required" }
+            if (-not $data.Hours -or $data.Hours -le 0) { throw "Valid hours required" }
+            
+            $newEntry = @{
+                Id = New-Guid
+                ProjectKey = $data.Project
+                Hours = [double]$data.Hours
+                Description = $data.Description ?? ""
+                Date = $data.Date ?? (Get-Date).ToString("yyyy-MM-dd")
+                EnteredAt = (Get-Date).ToString("o")
+                TaskId = $data.TaskId
+            }
+            
+            $script:Data.TimeEntries += $newEntry
+            $script:DataModified = $true
+            
+            if ($script:Data.Settings.AutoSave) {
+                Save-UnifiedData
+            }
+            
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Time entry saved: $($data.Hours)h for $($data.Project)"
+                Type = "Success" 
+            }
+            
+            Publish-Event -EventName "Data.TimeEntry.Created" -Data @{ Entry = $newEntry }
+            
+        } catch {
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Failed to create time entry: $_"
+                Type = "Error" 
+            }
+        }
+    }
+    
+    # Project Creation
+    Subscribe-Event -EventName "Data.Create.Project" -Handler {
+        param($EventData)
+        $data = $EventData.Data
+        
+        try {
+            if (-not $data.Key) { throw "Project key is required" }
+            if (-not $data.Name) { throw "Project name is required" }
+            
+            if ($script:Data.Projects.ContainsKey($data.Key)) {
+                throw "Project key '$($data.Key)' already exists"
+            }
+            
+            $newProject = @{
+                Key = $data.Key
+                Name = $data.Name
+                Client = $data.Client ?? ""
+                BillingType = $data.BillingType ?? "NonBillable"
+                Rate = [double]($data.Rate ?? 0)
+                Budget = [double]($data.Budget ?? 0)
+                Id1 = $data.Id1 ?? ""
+                Id2 = $data.Id2 ?? ""
+                CreatedAt = (Get-Date).ToString("o")
+                Active = $true
+            }
+            
+            $script:Data.Projects[$data.Key] = $newProject
+            $script:DataModified = $true
+            
+            if ($script:Data.Settings.AutoSave) {
+                Save-UnifiedData
+            }
+            
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Project created: $($data.Name)"
+                Type = "Success" 
+            }
+            
+            Publish-Event -EventName "Data.Project.Created" -Data @{ Project = $newProject }
+            
+        } catch {
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Failed to create project: $_"
+                Type = "Error" 
+            }
+        }
+    }
+    
+    # Task Creation
+    Subscribe-Event -EventName "Data.Create.Task" -Handler {
+        param($EventData)
+        $data = $EventData.Data
+        
+        try {
+            if (-not $data.Description) { throw "Task description is required" }
+            
+            $newTask = @{
+                Id = New-Guid
+                Description = $data.Description
+                ProjectKey = $data.ProjectKey
+                Priority = $data.Priority ?? "Medium"
+                DueDate = $data.DueDate
+                Tags = @($data.Tags ?? @())
+                Completed = $false
+                CreatedAt = (Get-Date).ToString("o")
+                Progress = 0
+            }
+            
+            $script:Data.Tasks += $newTask
+            $script:DataModified = $true
+            
+            if ($script:Data.Settings.AutoSave) {
+                Save-UnifiedData
+            }
+            
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Task created: $($data.Description)"
+                Type = "Success" 
+            }
+            
+            Publish-Event -EventName "Data.Task.Created" -Data @{ Task = $newTask }
+            
+        } catch {
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Failed to create task: $_"
+                Type = "Error" 
+            }
+        }
+    }
+    
+    # Timer Start
+    Subscribe-Event -EventName "Data.Timer.Start" -Handler {
+        param($EventData)
+        $data = $EventData.Data
+        
+        try {
+            if (-not $data.ProjectKey) { throw "Project is required to start timer" }
+            
+            $timerKey = "$($data.ProjectKey)_$(Get-Date -Format 'yyyyMMddHHmmss')"
+            
+            $newTimer = @{
+                Key = $timerKey
+                ProjectKey = $data.ProjectKey
+                TaskId = $data.TaskId
+                Description = $data.Description ?? ""
+                StartTime = (Get-Date).ToString("o")
+            }
+            
+            $script:Data.ActiveTimers[$timerKey] = $newTimer
+            $script:DataModified = $true
+            
+            if ($script:Data.Settings.AutoSave) {
+                Save-UnifiedData
+            }
+            
+            $project = $script:Data.Projects[$data.ProjectKey]
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Timer started for: $($project.Name)"
+                Type = "Success" 
+            }
+            
+            Publish-Event -EventName "Data.Timer.Started" -Data @{ Timer = $newTimer }
+            
+        } catch {
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Failed to start timer: $_"
+                Type = "Error" 
+            }
+        }
+    }
+    
+    # Timer Stop
+    Subscribe-Event -EventName "Data.Timer.Stop" -Handler {
+        param($EventData)
+        $data = $EventData.Data
+        
+        try {
+            if (-not $data.TimerKey) { throw "Timer key is required" }
+            
+            if (-not $script:Data.ActiveTimers.ContainsKey($data.TimerKey)) {
+                throw "Timer not found: $($data.TimerKey)"
+            }
+            
+            $timer = $script:Data.ActiveTimers[$data.TimerKey]
+            $startTime = [DateTime]$timer.StartTime
+            $elapsed = (Get-Date) - $startTime
+            
+            # Create time entry from timer
+            $timeEntry = @{
+                Id = New-Guid
+                ProjectKey = $timer.ProjectKey
+                Hours = [Math]::Round($elapsed.TotalHours, 2)
+                Description = $timer.Description
+                Date = $startTime.ToString("yyyy-MM-dd")
+                EnteredAt = (Get-Date).ToString("o")
+                TaskId = $timer.TaskId
+                FromTimer = $true
+            }
+            
+            $script:Data.TimeEntries += $timeEntry
+            $script:Data.ActiveTimers.Remove($data.TimerKey)
+            $script:DataModified = $true
+            
+            if ($script:Data.Settings.AutoSave) {
+                Save-UnifiedData
+            }
+            
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Timer stopped: $([Math]::Round($elapsed.TotalHours, 2))h recorded"
+                Type = "Success" 
+            }
+            
+            Publish-Event -EventName "Data.Timer.Stopped" -Data @{ 
+                Timer = $timer
+                TimeEntry = $timeEntry 
+            }
+            
+        } catch {
+            Publish-Event -EventName "Notification.Show" -Data @{ 
+                Text = "Failed to stop timer: $_"
+                Type = "Error" 
+            }
+        }
+    }
+    
+    # Stop All Timers
+    Subscribe-Event -EventName "Data.Timer.StopAll" -Handler {
+        param($EventData)
+        
+        $timerKeys = @($script:Data.ActiveTimers.Keys)
+        foreach ($timerKey in $timerKeys) {
+            Publish-Event -EventName "Data.Timer.Stop" -Data @{ TimerKey = $timerKey }
+        }
+    }
+}
+
+function global:Get-ProjectOrTemplate {
+    <#
+    .SYNOPSIS
+    Gets a project or template by key
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Key
+    )
+    
+    if ($script:Data.Projects.ContainsKey($Key)) {
+        return $script:Data.Projects[$Key]
+    } elseif ($script:Data.TodoTemplates.ContainsKey($Key)) {
+        return $script:Data.TodoTemplates[$Key]
+    } else {
+        return @{ 
+            Key = $Key
+            Name = $Key
+            Client = ""
+            BillingType = "NonBillable"
+            Rate = 0
+        }
+    }
+}
+
+function global:New-Guid {
+    <#
+    .SYNOPSIS
+    Generates a new unique identifier
+    #>
+    return [Guid]::NewGuid().ToString()
+}
+
+function Initialize-SampleData {
+    <#
+    .SYNOPSIS
+    Initializes sample data for first-time users
+    #>
+    
+    # Sample projects
+    $script:Data.Projects["INTERNAL"] = @{
+        Key = "INTERNAL"
+        Name = "Internal Work"
+        Client = "Company"
+        BillingType = "NonBillable"
+        Rate = 0
+        Budget = 0
+        Active = $true
+        CreatedAt = (Get-Date).ToString("o")
+    }
+    
+    $script:Data.Projects["SAMPLE"] = @{
+        Key = "SAMPLE"
+        Name = "Sample Project"
+        Client = "Sample Client"
+        BillingType = "Billable"
+        Rate = 100
+        Budget = 10000
+        Active = $true
+        CreatedAt = (Get-Date).ToString("o")
+    }
+    
+    # Sample todo templates
+    $script:Data.TodoTemplates["PERSONAL"] = @{
+        Key = "PERSONAL"
+        Name = "Personal Tasks"
+        Client = ""
+        BillingType = "NonBillable"
+        Rate = 0
+        IsTemplate = $true
+    }
+    
+    Write-Verbose "Sample data initialized"
+}
+
+# Helper function to get week dates
+function global:Get-WeekDates {
+    param([DateTime]$Date)
+    
+    $monday = $Date.AddDays(1 - [int]$Date.DayOfWeek)
+    if ($Date.DayOfWeek -eq [DayOfWeek]::Sunday) {
+        $monday = $monday.AddDays(-7)
+    }
+    
+    return @(
+        @{ Name = "Monday"; Date = $monday.Date }
+        @{ Name = "Tuesday"; Date = $monday.AddDays(1).Date }
+        @{ Name = "Wednesday"; Date = $monday.AddDays(2).Date }
+        @{ Name = "Thursday"; Date = $monday.AddDays(3).Date }
+        @{ Name = "Friday"; Date = $monday.AddDays(4).Date }
+    )
+}
+
+function global:Get-WeekStart {
+    param([DateTime]$Date)
+    
+    $monday = $Date.AddDays(1 - [int]$Date.DayOfWeek)
+    if ($Date.DayOfWeek -eq [DayOfWeek]::Sunday) {
+        $monday = $monday.AddDays(-7)
+    }
+    
+    return $monday.Date
+}
+
+# Export functions
+Export-ModuleMember -Function @(
+    'Initialize-DataManager',
+    'Load-UnifiedData',
+    'Save-UnifiedData',
+    'Initialize-DataEventHandlers',
+    'Get-ProjectOrTemplate',
+    'New-Guid',
+    'Get-WeekDates',
+    'Get-WeekStart'
+) -Variable @('Data')
+
+# Dialog System Module (Fixed Input Handling)
+# Provides a high-level API for modal dialogs using a robust, component-based architecture.
+
+$script:DialogState = @{
+    CurrentDialog = $null
+    DialogStack   = [System.Collections.Stack]::new()
+}
+
+#region --- Public API & Factory Functions ---
+
+function global:Show-TuiDialog {
+    <# .SYNOPSIS Internal function to display a dialog component. #>
+    param([hashtable]$DialogComponent)
+    
+    if ($script:DialogState.CurrentDialog) {
+        $script:DialogState.DialogStack.Push($script:DialogState.CurrentDialog)
+    }
+    $script:DialogState.CurrentDialog = $DialogComponent
+    Request-TuiRefresh
+}
+
+function global:Close-TuiDialog {
+    <# .SYNOPSIS Closes the current dialog and restores the previous one, if any. #>
+    if ($script:DialogState.DialogStack.Count -gt 0) {
+        $script:DialogState.CurrentDialog = $script:DialogState.DialogStack.Pop()
+    } else {
+        $script:DialogState.CurrentDialog = $null
+    }
+    Request-TuiRefresh
+}
+
+function global:Show-ConfirmDialog {
+    <# .SYNOPSIS Displays a standard Yes/No confirmation dialog. #>
+    param(
+        [string]$Title = "Confirm",
+        [string]$Message,
+        [scriptblock]$OnConfirm,
+        [scriptblock]$OnCancel = {}
+    )
+    
+    $dialog = New-TuiDialog -Props @{
+        Title         = $Title
+        Message       = $Message
+        Buttons       = @("Yes", "No")
+        Width         = [Math]::Min(80, [Math]::Max(50, $Message.Length + 10))
+        Height        = 10
+        OnButtonClick = {
+            param($Button, $Index)
+            Close-TuiDialog
+            if ($Index -eq 0) { & $OnConfirm } else { & $OnCancel }
+        }
+        OnCancel      = { Close-TuiDialog; & $OnCancel }
+    }
+    Show-TuiDialog -DialogComponent $dialog
+}
+
+function global:Show-AlertDialog {
+    <# .SYNOPSIS Displays a simple alert with an OK button. #>
+    param(
+        [string]$Title = "Alert",
+        [string]$Message
+    )
+    
+    $dialog = New-TuiDialog -Props @{
+        Title         = $Title
+        Message       = $Message
+        Buttons       = @("OK")
+        Width         = [Math]::Min(80, [Math]::Max(40, $Message.Length + 10))
+        Height        = 10
+        OnButtonClick = { Close-TuiDialog }
+        OnCancel      = { Close-TuiDialog }
+    }
+    Show-TuiDialog -DialogComponent $dialog
+}
+
+function global:Show-InputDialog {
+    <# .SYNOPSIS Displays a dialog to get text input from the user. #>
+    param(
+        [string]$Title = "Input",
+        [string]$Prompt,
+        [string]$DefaultValue = "",
+        [scriptblock]$OnSubmit,
+        [scriptblock]$OnCancel = {}
+    )
+
+    # This dialog is a TuiForm containing a Label, TextBox, and Buttons.
+    $form = New-TuiForm -Props @{
+        Name    = "InputDialogForm"
+        Title   = " $Title "
+        Width   = [Math]::Min(80, [Math]::Max(50, $Prompt.Length + 6))
+        Height  = 12
+        Padding = 2
+        State   = @{
+            InputValue       = $DefaultValue
+            InputCursor      = $DefaultValue.Length
+            FocusedChildName = "InputTextBox" # Start focus on the textbox
+        }
+        Children = @(
+            New-TuiLabel -Props @{
+                Name = "PromptLabel"
+                X = 0; Y = 0
+                Text = $Prompt
+            }
+            New-TuiTextBox -Props @{
+                Name           = "InputTextBox"
+                X = 0; Y = 2
+                Width          = [Math]::Min(76, [Math]::Max(46, $Prompt.Length + 2))
+                TextProp       = "InputValue"
+                CursorProp     = "InputCursor"
+                OnChange       = { $this.State.InputValue = $args[0].NewText; $this.State.InputCursor = $args[0].NewCursorPosition }
+            }
+            New-TuiButton -Props @{
+                Name    = "SubmitButton"
+                X = 0; Y = 6
+                Width   = 12
+                Text    = "OK"
+                OnClick = { 
+                    Close-TuiDialog
+                    & $OnSubmit -Value $this.State.InputValue
+                }
+            }
+            New-TuiButton -Props @{
+                Name    = "CancelButton"
+                X = 14; Y = 6
+                Width   = 12
+                Text    = "Cancel"
+                OnClick = { 
+                    Close-TuiDialog
+                    & $OnCancel
+                }
+            }
+        )
+        # Override the form's input handler to also catch Enter/Escape globally
+        HandleInput = {
+            param($self, $Key)
+            if ($Key.Key -eq [ConsoleKey]::Escape) {
+                Close-TuiDialog
+                & $OnCancel
+                return $true
+            }
+            
+            # Let the default TuiForm handler manage Tab and child input (Enter on buttons, etc.)
+            $formPrototype = New-TuiForm
+            $handledByChild = & $formPrototype.HandleInput -self $self -Key $Key
+
+            # If not handled by a child (e.g. Enter in TextBox), treat as submit
+            if (-not $handledByChild -and $Key.Key -eq [ConsoleKey]::Enter) {
+                Close-TuiDialog
+                & $OnSubmit -Value $self.State.InputValue
+                return $true
+            }
+
+            return $handledByChild
+        }.GetNewClosure()
+    }
+    Show-TuiDialog -DialogComponent $form
+}
+
+#endregion
+
+#region --- Engine Integration & Initialization ---
+
+function global:Initialize-DialogSystem {
+    <# .SYNOPSIS Subscribes to high-level application events to show dialogs. #>
+    
+    Subscribe-Event -EventName "Confirm.Request" -Handler {
+        param($EventData)
+        $dialogParams = $EventData.Data
+        Show-ConfirmDialog @dialogParams
+    }
+    
+    Subscribe-Event -EventName "Alert.Show" -Handler {
+        param($EventData)
+        $dialogParams = $EventData.Data
+        Show-AlertDialog @dialogParams
+    }
+    
+    Subscribe-Event -EventName "Input.Request" -Handler {
+        param($EventData)
+        $dialogParams = $EventData.Data
+        Show-InputDialog @dialogParams
+    }
+    
+    Write-Verbose "Dialog System initialized and event handlers registered."
+}
+
+function global:Render-Dialogs {
+    <# .SYNOPSIS Engine Hook: Renders the current dialog over the screen. #>
+    if ($script:DialogState.CurrentDialog) {
+        # Center the dialog component before rendering
+        $dialog = $script:DialogState.CurrentDialog
+        $dialog.X = [Math]::Floor(($script:TuiState.BufferWidth - $dialog.Width) / 2)
+        $dialog.Y = [Math]::Floor(($script:TuiState.BufferHeight - $dialog.Height) / 2)
+        
+        & $dialog.Render -self $dialog
+    }
+}
+
+function global:Handle-DialogInput {
+    <# .SYNOPSIS Engine Hook: Intercepts input if a dialog is active. #>
+    param($Key)  # Removed type constraint to match fixed input handling
+    
+    if ($script:DialogState.CurrentDialog) {
+        return & $script:DialogState.CurrentDialog.HandleInput -self $script:DialogState.CurrentDialog -Key $Key
+    }
+    return $false # No active dialog, input was not handled.
+}
+
+function global:Update-DialogSystem {
+    <# .SYNOPSIS Engine Hook: Updates dialog system state. #>
+    # Placeholder for any periodic updates needed
+}
+
+function global:New-TuiDialog {
+    <# .SYNOPSIS Creates a simple dialog component. #>
+    param([hashtable]$Props = @{})
+    
+    $dialog = @{
+        Type = "Dialog"
+        Title = $Props.Title ?? "Dialog"
+        Message = $Props.Message ?? ""
+        Buttons = $Props.Buttons ?? @("OK")
+        SelectedButton = 0
+        Width = $Props.Width ?? 50
+        Height = $Props.Height ?? 10
+        X = 0
+        Y = 0
+        OnButtonClick = $Props.OnButtonClick ?? {}
+        OnCancel = $Props.OnCancel ?? {}
+        
+        Render = {
+            param($self)
+            
+            # Draw dialog box
+            Write-BufferBox -X $self.X -Y $self.Y -Width $self.Width -Height $self.Height -Title $self.Title -BorderColor (Get-ThemeColor "Accent")
+            
+            # Message
+            $messageY = $self.Y + 2
+            $messageX = $self.X + 2
+            $maxWidth = $self.Width - 4
+            
+            # Word wrap message if needed
+            if ($self.Message.Length -le $maxWidth) {
+                Write-BufferString -X $messageX -Y $messageY -Text $self.Message -ForegroundColor (Get-ThemeColor "Primary")
+            } else {
+                # Simple word wrapping
+                $words = $self.Message -split ' '
+                $line = ""
+                $currentY = $messageY
+                
+                foreach ($word in $words) {
+                    if (($line + " " + $word).Length -gt $maxWidth) {
+                        Write-BufferString -X $messageX -Y $currentY -Text $line.Trim() -ForegroundColor (Get-ThemeColor "Primary")
+                        $currentY++
+                        $line = $word
+                    } else {
+                        $line = if ($line) { "$line $word" } else { $word }
+                    }
+                }
+                if ($line) {
+                    Write-BufferString -X $messageX -Y $currentY -Text $line.Trim() -ForegroundColor (Get-ThemeColor "Primary")
+                }
+            }
+            
+            # Buttons
+            $buttonY = $self.Y + $self.Height - 3
+            $totalButtonWidth = ($self.Buttons.Count * 12) + (($self.Buttons.Count - 1) * 2)
+            $buttonX = $self.X + [Math]::Floor(($self.Width - $totalButtonWidth) / 2)
+            
+            for ($i = 0; $i -lt $self.Buttons.Count; $i++) {
+                $isSelected = ($i -eq $self.SelectedButton)
+                $buttonText = if ($isSelected) { "[ $($self.Buttons[$i]) ]" } else { "  $($self.Buttons[$i])  " }
+                $color = if ($isSelected) { Get-ThemeColor "Warning" } else { Get-ThemeColor "Primary" }
+                
+                Write-BufferString -X $buttonX -Y $buttonY -Text $buttonText -ForegroundColor $color
+                $buttonX += 14
+            }
+        }
+        
+        HandleInput = {
+            param($self, $Key)
+            
+            switch ($Key.Key) {
+                ([ConsoleKey]::LeftArrow) {
+                    $self.SelectedButton = [Math]::Max(0, $self.SelectedButton - 1)
+                    Request-TuiRefresh
+                    return $true
+                }
+                ([ConsoleKey]::RightArrow) {
+                    $self.SelectedButton = [Math]::Min($self.Buttons.Count - 1, $self.SelectedButton + 1)
+                    Request-TuiRefresh
+                    return $true
+                }
+                ([ConsoleKey]::Tab) {
+                    $self.SelectedButton = ($self.SelectedButton + 1) % $self.Buttons.Count
+                    Request-TuiRefresh
+                    return $true
+                }
+                ([ConsoleKey]::Enter) {
+                    & $self.OnButtonClick -Button $self.Buttons[$self.SelectedButton] -Index $self.SelectedButton
+                    return $true
+                }
+                ([ConsoleKey]::Escape) {
+                    & $self.OnCancel
+                    return $true
+                }
+            }
+            
+            # Check for button hotkeys (first letter)
+            if ($Key.KeyChar) {
+                $char = [char]::ToUpper($Key.KeyChar)
+                for ($i = 0; $i -lt $self.Buttons.Count; $i++) {
+                    if ($self.Buttons[$i].Length -gt 0 -and [char]::ToUpper($self.Buttons[$i][0]) -eq $char) {
+                        & $self.OnButtonClick -Button $self.Buttons[$i] -Index $i
+                        return $true
+                    }
+                }
+            }
+            
+            return $false
+        }
+    }
+    
+    return $dialog
+}
+
+#endregion
+
+Export-ModuleMember -Function @(
+    'Initialize-DialogSystem',
+    'Show-ConfirmDialog',
+    'Show-AlertDialog',
+    'Show-InputDialog',
+    'Close-TuiDialog',
+    'Render-Dialogs',
+    'Handle-DialogInput',
+    'Update-DialogSystem',
+    'New-TuiDialog'
+)
+# Event System Module
+# Provides pub/sub event functionality for decoupled communication
+
+$script:EventHandlers = @{}
+$script:EventHistory = @()
+$script:MaxEventHistory = 100
+
+function global:Initialize-EventSystem {
+    <#
+    .SYNOPSIS
+    Initializes the event system for the application
+    #>
+    $script:EventHandlers = @{}
+    $script:EventHistory = @()
+    Write-Verbose "Event system initialized"
+}
+
+function global:Publish-Event {
+    <#
+    .SYNOPSIS
+    Publishes an event to all registered handlers
+    
+    .PARAMETER EventName
+    The name of the event to publish
+    
+    .PARAMETER Data
+    Optional data to pass to event handlers
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$EventName,
+        
+        [Parameter()]
+        [hashtable]$Data = @{}
+    )
+    
+    # Record event in history
+    $eventRecord = @{
+        EventName = $EventName
+        Data = $Data
+        Timestamp = Get-Date
+    }
+    
+    $script:EventHistory += $eventRecord
+    if ($script:EventHistory.Count -gt $script:MaxEventHistory) {
+        $script:EventHistory = $script:EventHistory[-$script:MaxEventHistory..-1]
+    }
+    
+    # Execute handlers
+    if ($script:EventHandlers.ContainsKey($EventName)) {
+        foreach ($handler in $script:EventHandlers[$EventName]) {
+            try {
+                $eventData = @{
+                    EventName = $EventName
+                    Data = $Data
+                    Timestamp = $eventRecord.Timestamp
+                }
+                
+                & $handler.ScriptBlock -EventData $eventData
+            } catch {
+                Write-Warning "Error in event handler for '$EventName': $_"
+            }
+        }
+    }
+    
+    Write-Verbose "Published event: $EventName"
+}
+
+function global:Subscribe-Event {
+    <#
+    .SYNOPSIS
+    Subscribes to an event with a handler
+    
+    .PARAMETER EventName
+    The name of the event to subscribe to
+    
+    .PARAMETER Handler
+    The script block to execute when the event is published
+    
+    .PARAMETER HandlerId
+    Optional unique identifier for the handler
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$EventName,
+        
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Handler,
+        
+        [Parameter()]
+        [string]$HandlerId = [Guid]::NewGuid().ToString()
+    )
+    
+    if (-not $script:EventHandlers.ContainsKey($EventName)) {
+        $script:EventHandlers[$EventName] = @()
+    }
+    
+    $handlerInfo = @{
+        HandlerId = $HandlerId
+        ScriptBlock = $Handler
+        SubscribedAt = Get-Date
+    }
+    
+    $script:EventHandlers[$EventName] += $handlerInfo
+    
+    Write-Verbose "Subscribed to event: $EventName (Handler: $HandlerId)"
+    
+    return $HandlerId
+}
+
+function global:Unsubscribe-Event {
+    <#
+    .SYNOPSIS
+    Unsubscribes from an event
+    
+    .PARAMETER EventName
+    The name of the event to unsubscribe from
+    
+    .PARAMETER HandlerId
+    The unique identifier of the handler to remove
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$EventName,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$HandlerId
+    )
+    
+    if ($script:EventHandlers.ContainsKey($EventName)) {
+        $script:EventHandlers[$EventName] = @($script:EventHandlers[$EventName] | Where-Object { $_.HandlerId -ne $HandlerId })
+        
+        if ($script:EventHandlers[$EventName].Count -eq 0) {
+            $script:EventHandlers.Remove($EventName)
+        }
+        
+        Write-Verbose "Unsubscribed from event: $EventName (Handler: $HandlerId)"
+    }
+}
+
+function global:Get-EventHandlers {
+    <#
+    .SYNOPSIS
+    Gets all registered event handlers
+    
+    .PARAMETER EventName
+    Optional event name to filter by
+    #>
+    param(
+        [Parameter()]
+        [string]$EventName
+    )
+    
+    if ($EventName) {
+        if ($script:EventHandlers.ContainsKey($EventName)) {
+            return $script:EventHandlers[$EventName]
+        } else {
+            return @()
+        }
+    } else {
+        return $script:EventHandlers
+    }
+}
+
+function global:Clear-EventHandlers {
+    <#
+    .SYNOPSIS
+    Clears all event handlers for a specific event or all events
+    
+    .PARAMETER EventName
+    Optional event name to clear handlers for
+    #>
+    param(
+        [Parameter()]
+        [string]$EventName
+    )
+    
+    if ($EventName) {
+        if ($script:EventHandlers.ContainsKey($EventName)) {
+            $script:EventHandlers.Remove($EventName)
+            Write-Verbose "Cleared handlers for event: $EventName"
+        }
+    } else {
+        $script:EventHandlers = @{}
+        Write-Verbose "Cleared all event handlers"
+    }
+}
+
+function global:Get-EventHistory {
+    <#
+    .SYNOPSIS
+    Gets the event history
+    
+    .PARAMETER EventName
+    Optional event name to filter by
+    
+    .PARAMETER Last
+    Number of recent events to return
+    #>
+    param(
+        [Parameter()]
+        [string]$EventName,
+        
+        [Parameter()]
+        [int]$Last = 0
+    )
+    
+    $history = $script:EventHistory
+    
+    if ($EventName) {
+        $history = $history | Where-Object { $_.EventName -eq $EventName }
+    }
+    
+    if ($Last -gt 0) {
+        $history = $history | Select-Object -Last $Last
+    }
+    
+    return $history
+}
+
+# Export functions
+Export-ModuleMember -Function @(
+    'Initialize-EventSystem',
+    'Publish-Event',
+    'Subscribe-Event',
+# Theme Manager Module
+# Provides theming and color management for the TUI
+
+$script:CurrentTheme = $null
+$script:Themes = @{
+    Modern = @{
+        Name = "Modern"
+        Colors = @{
+            # Base colors
+            Background = [ConsoleColor]::Black
+            Foreground = [ConsoleColor]::White
+            
+            # UI elements
+            Primary = [ConsoleColor]::White
+            Secondary = [ConsoleColor]::Gray
+            Accent = [ConsoleColor]::Cyan
+            Success = [ConsoleColor]::Green
+            Warning = [ConsoleColor]::Yellow
+            Error = [ConsoleColor]::Red
+            Info = [ConsoleColor]::Blue
+            
+            # Special elements
+            Header = [ConsoleColor]::Cyan
+            Border = [ConsoleColor]::DarkGray
+            Selection = [ConsoleColor]::Yellow
+            Highlight = [ConsoleColor]::Cyan
+            Subtle = [ConsoleColor]::DarkGray
+            
+            # Syntax highlighting
+            Keyword = [ConsoleColor]::Blue
+            String = [ConsoleColor]::Green
+            Number = [ConsoleColor]::Magenta
+            Comment = [ConsoleColor]::DarkGray
+        }
+    }
+    
+    Dark = @{
+        Name = "Dark"
+        Colors = @{
+            Background = [ConsoleColor]::Black
+            Foreground = [ConsoleColor]::Gray
+            Primary = [ConsoleColor]::Gray
+            Secondary = [ConsoleColor]::DarkGray
+            Accent = [ConsoleColor]::DarkCyan
+            Success = [ConsoleColor]::DarkGreen
+            Warning = [ConsoleColor]::DarkYellow
+            Error = [ConsoleColor]::DarkRed
+            Info = [ConsoleColor]::DarkBlue
+            Header = [ConsoleColor]::DarkCyan
+            Border = [ConsoleColor]::DarkGray
+            Selection = [ConsoleColor]::Yellow
+            Highlight = [ConsoleColor]::Cyan
+            Subtle = [ConsoleColor]::DarkGray
+            Keyword = [ConsoleColor]::DarkBlue
+            String = [ConsoleColor]::DarkGreen
+            Number = [ConsoleColor]::DarkMagenta
+            Comment = [ConsoleColor]::DarkGray
+        }
+    }
+    
+    Light = @{
+        Name = "Light"
+        Colors = @{
+            Background = [ConsoleColor]::White
+            Foreground = [ConsoleColor]::Black
+            Primary = [ConsoleColor]::Black
+            Secondary = [ConsoleColor]::DarkGray
+            Accent = [ConsoleColor]::Blue
+            Success = [ConsoleColor]::Green
+            Warning = [ConsoleColor]::DarkYellow
+            Error = [ConsoleColor]::Red
+            Info = [ConsoleColor]::Blue
+            Header = [ConsoleColor]::Blue
+            Border = [ConsoleColor]::Gray
+            Selection = [ConsoleColor]::Cyan
+            Highlight = [ConsoleColor]::Yellow
+            Subtle = [ConsoleColor]::Gray
+            Keyword = [ConsoleColor]::Blue
+            String = [ConsoleColor]::Green
+            Number = [ConsoleColor]::Magenta
+            Comment = [ConsoleColor]::Gray
+        }
+    }
+    
+    Retro = @{
+        Name = "Retro"
+        Colors = @{
+            Background = [ConsoleColor]::Black
+            Foreground = [ConsoleColor]::Green
+            Primary = [ConsoleColor]::Green
+            Secondary = [ConsoleColor]::DarkGreen
+            Accent = [ConsoleColor]::Yellow
+            Success = [ConsoleColor]::Green
+            Warning = [ConsoleColor]::Yellow
+            Error = [ConsoleColor]::Red
+            Info = [ConsoleColor]::Cyan
+            Header = [ConsoleColor]::Yellow
+            Border = [ConsoleColor]::DarkGreen
+            Selection = [ConsoleColor]::Yellow
+            Highlight = [ConsoleColor]::White
+            Subtle = [ConsoleColor]::DarkGreen
+            Keyword = [ConsoleColor]::Yellow
+            String = [ConsoleColor]::Cyan
+            Number = [ConsoleColor]::White
+            Comment = [ConsoleColor]::DarkGreen
+        }
+    }
+}
+
+function global:Initialize-ThemeManager {
+    <#
+    .SYNOPSIS
+    Initializes the theme manager
+    #>
+    
+    # Set default theme
+    Set-TuiTheme -ThemeName "Modern"
+    
+    Write-Verbose "Theme manager initialized"
+}
+
+function global:Set-TuiTheme {
+    <#
+    .SYNOPSIS
+    Sets the current theme
+    
+    .PARAMETER ThemeName
+    The name of the theme to set
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("Modern", "Dark", "Light", "Retro")]
+        [string]$ThemeName
+    )
+    
+    if ($script:Themes.ContainsKey($ThemeName)) {
+        $script:CurrentTheme = $script:Themes[$ThemeName]
+        
+        # Apply console colors
+        $Host.UI.RawUI.BackgroundColor = $script:CurrentTheme.Colors.Background
+        $Host.UI.RawUI.ForegroundColor = $script:CurrentTheme.Colors.Foreground
+        
+        Write-Verbose "Theme set to: $ThemeName"
+        
+        # Publish theme change event
+        Publish-Event -EventName "Theme.Changed" -Data @{ 
+            ThemeName = $ThemeName
+            Theme = $script:CurrentTheme 
+        }
+    } else {
+        Write-Warning "Theme not found: $ThemeName"
+    }
+}
+
+function global:Get-ThemeColor {
+    <#
+    .SYNOPSIS
+    Gets a color from the current theme
+    
+    .PARAMETER ColorName
+    The name of the color to get
+    
+    .PARAMETER Default
+    Default color if not found
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ColorName,
+        
+        [Parameter()]
+        [ConsoleColor]$Default = [ConsoleColor]::Gray
+    )
+    
+    if ($script:CurrentTheme -and $script:CurrentTheme.Colors.ContainsKey($ColorName)) {
+        return $script:CurrentTheme.Colors[$ColorName]
+    } else {
+        return $Default
+    }
+}
+
+function global:Get-TuiTheme {
+    <#
+    .SYNOPSIS
+    Gets the current theme
+    #>
+    
+    return $script:CurrentTheme
+}
+
+function global:Get-AvailableThemes {
+    <#
+    .SYNOPSIS
+    Gets all available themes
+    #>
+    
+    return $script:Themes.Keys | Sort-Object
+}
+
+function global:New-TuiTheme {
+    <#
+    .SYNOPSIS
+    Creates a new theme
+    
+    .PARAMETER Name
+    The name of the new theme
+    
+    .PARAMETER BaseTheme
+    The name of the theme to base this on
+    
+    .PARAMETER Colors
+    Hashtable of color overrides
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        
+        [Parameter()]
+        [string]$BaseTheme = "Modern",
+        
+        [Parameter()]
+        [hashtable]$Colors = @{}
+    )
+    
+    # Clone base theme
+    $newTheme = @{
+        Name = $Name
+        Colors = @{}
+    }
+    
+    if ($script:Themes.ContainsKey($BaseTheme)) {
+        foreach ($colorKey in $script:Themes[$BaseTheme].Colors.Keys) {
+            $newTheme.Colors[$colorKey] = $script:Themes[$BaseTheme].Colors[$colorKey]
+        }
+    }
+    
+    # Apply overrides
+    foreach ($colorKey in $Colors.Keys) {
+        $newTheme.Colors[$colorKey] = $Colors[$colorKey]
+    }
+    
+    # Save theme
+    $script:Themes[$Name] = $newTheme
+    
+    Write-Verbose "Created new theme: $Name"
+    
+    return $newTheme
+}
+
+function global:Export-TuiTheme {
+    <#
+    .SYNOPSIS
+    Exports a theme to JSON
+    
+    .PARAMETER ThemeName
+    The name of the theme to export
+    
+    .PARAMETER Path
+    The path to save the theme
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ThemeName,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+    
+    if ($script:Themes.ContainsKey($ThemeName)) {
+        $theme = $script:Themes[$ThemeName]
+        
+        # Convert ConsoleColor enums to strings for JSON
+        $exportTheme = @{
+            Name = $theme.Name
+            Colors = @{}
+        }
+        
+        foreach ($colorKey in $theme.Colors.Keys) {
+            $exportTheme.Colors[$colorKey] = $theme.Colors[$colorKey].ToString()
+        }
+        
+        $exportTheme | ConvertTo-Json -Depth 3 | Set-Content -Path $Path
+        
+        Write-Verbose "Exported theme to: $Path"
+    } else {
+        Write-Warning "Theme not found: $ThemeName"
+    }
+}
+
+function global:Import-TuiTheme {
+    <#
+    .SYNOPSIS
+    Imports a theme from JSON
+    
+    .PARAMETER Path
+    The path to the theme file
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+    
+    if (Test-Path $Path) {
+        try {
+            $importedTheme = Get-Content $Path -Raw | ConvertFrom-Json
+            
+            $theme = @{
+                Name = $importedTheme.Name
+                Colors = @{}
+            }
+            
+            # Convert string color names back to ConsoleColor enums
+            foreach ($colorProp in $importedTheme.Colors.PSObject.Properties) {
+                $theme.Colors[$colorProp.Name] = [ConsoleColor]$colorProp.Value
+            }
+            
+            $script:Themes[$theme.Name] = $theme
+            
+            Write-Verbose "Imported theme: $($theme.Name)"
+            
+            return $theme
+        } catch {
+            Write-Error "Failed to import theme: $_"
+        }
+    } else {
+        Write-Warning "Theme file not found: $Path"
+    }
+}
+
+# Export functions
+Export-ModuleMember -Function @(
+    'Initialize-ThemeManager',
+    'Set-TuiTheme',
+    'Get-ThemeColor',
+    'Get-TuiTheme',
+    'Get-AvailableThemes',
+    'New-TuiTheme',
+    'Export-TuiTheme',
+    'Import-TuiTheme'
+)
+# Rock-Solid TUI Engine v3.1 - Single-Threaded Architecture
+# This version fixes input lag and unresponsiveness by removing the complex multi-threaded input handler.
+
+#region Core TUI State
+$script:TuiState = @{
+    Running         = $false
+    BufferWidth     = 0
+    BufferHeight    = 0
+    FrontBuffer     = $null
+    BackBuffer      = $null
+    ScreenStack     = [System.Collections.Stack]::new()
+    CurrentScreen   = $null
+    IsDirty         = $true
+    LastActivity    = [DateTime]::Now
+    LastRenderTime  = [DateTime]::MinValue
+    RenderStats     = @{ LastFrameTime = 0; FrameCount = 0; TotalTime = 0 }
+    Components      = @()  # Component registry
+    Layouts         = @{}  # Layout engines
+    FocusedComponent = $null
+}
+#endregion
+
+#region Engine Lifecycle & Main Loop
+
+function global:Initialize-TuiEngine {
+    param(
+        [int]$Width = [Console]::WindowWidth,
+        [int]$Height = [Console]::WindowHeight - 1
+    )
+    
+    try {
+        if ($Width -le 0 -or $Height -le 0) { throw "Invalid console dimensions: ${Width}x${Height}" }
+        
+        $script:TuiState.BufferWidth = $Width
+        $script:TuiState.BufferHeight = $Height
+        $script:TuiState.FrontBuffer = New-Object 'object[,]' $Height, $Width
+        $script:TuiState.BackBuffer = New-Object 'object[,]' $Height, $Width
+        
+        # Initialize buffers with empty cells
+        for ($y = 0; $y -lt $Height; $y++) {
+            for ($x = 0; $x -lt $Width; $x++) {
+                $emptyCell = @{ Char = ' '; FG = [ConsoleColor]::White; BG = [ConsoleColor]::Black }
+                $script:TuiState.FrontBuffer[$y, $x] = $emptyCell
+                $script:TuiState.BackBuffer[$y, $x] = $emptyCell.Clone()
+            }
+        }
+        
+        [Console]::CursorVisible = $false
+        [Console]::Clear()
+        
+        # Initialize subsystems
+        Initialize-LayoutEngines
+        Initialize-ComponentSystem
+        
+        # Initialize external modules if available
+        if (Get-Command -Name "Initialize-ThemeManager" -ErrorAction SilentlyContinue) {
+            Initialize-ThemeManager
+        }
+        if (Get-Command -Name "Initialize-EventSystem" -ErrorAction SilentlyContinue) {
+            Initialize-EventSystem
+        }
+        
+        # Publish initialization event
+        if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
+            Publish-Event -EventName "System.EngineInitialized" -Data @{ Width = $Width; Height = $Height }
+        }
+        
+        # Export TuiState for global access
+        $global:TuiState = $script:TuiState
+    }
+    catch {
+        Write-Host "FATAL: Failed to initialize TUI Engine: $_" -ForegroundColor Red
+        throw
+    }
+}
+
+function Process-TuiInput {
+    # This function checks for and processes a single key press.
+    # It will be called once per frame from the main loop.
+    
+    if (-not [Console]::KeyAvailable) {
+        return
+    }
+
+    $key = [Console]::ReadKey($true)
+    $script:TuiState.LastActivity = [DateTime]::Now
+    
+    # Dialog system gets first chance at input
+    if ((Get-Command -Name "Handle-DialogInput" -ErrorAction SilentlyContinue) -and (Handle-DialogInput -Key $key)) {
+        return # Dialog handled it
+    }
+    
+    # Focused component gets the next chance
+    $focusedComponent = $script:TuiState.FocusedComponent
+    if ($focusedComponent -and $focusedComponent.HandleInput) {
+        if (& $focusedComponent.HandleInput -self $focusedComponent -Key $key) {
+            return # Component handled it
+        }
+    }
+    
+    # Finally, the screen itself gets the key
+    $currentScreen = $script:TuiState.CurrentScreen
+    if ($currentScreen -and $currentScreen.HandleInput) {
+        $result = & $currentScreen.HandleInput -self $currentScreen -Key $key
+        switch ($result) {
+            "Back" { Pop-Screen }
+            "Quit" { $script:TuiState.Running = $false }
+        }
+    }
+}
+
+function global:Start-TuiLoop {
+    param([hashtable]$InitialScreen)
+
+    try {
+        Initialize-TuiEngine
+        
+        if ($InitialScreen) {
+            Push-Screen -Screen $InitialScreen
+        }
+
+        $script:TuiState.Running = $true
+        while ($script:TuiState.Running) {
+            
+            # Process one frame's worth of updates
+            Process-TuiInput
+            if (Get-Command -Name "Update-DialogSystem" -ErrorAction SilentlyContinue) { Update-DialogSystem }
+
+            # Render if dirty
+            if ($script:TuiState.IsDirty) {
+                $bgColor = if (Get-Command -Name "Get-ThemeColor" -ErrorAction SilentlyContinue) {
+                    Get-ThemeColor "Background"
+                } else {
+                    [ConsoleColor]::Black
+                }
+                
+                Clear-BackBuffer -BackgroundColor $bgColor
+                
+                # Render current screen
+                if ($script:TuiState.CurrentScreen -and $script:TuiState.CurrentScreen.Render) {
+                    & $script:TuiState.CurrentScreen.Render -self $script:TuiState.CurrentScreen
+                }
+                
+                # Render dialogs on top
+                if (Get-Command -Name "Render-Dialogs" -ErrorAction SilentlyContinue) {
+                    Render-Dialogs
+                }
+                
+                # Perform optimized render
+                Render-BufferOptimized
+                $script:TuiState.IsDirty = $false
+            }
+            
+            # Use a fixed, short sleep for consistent high responsiveness (~60 FPS)
+            Start-Sleep -Milliseconds 16
+        }
+    }
+    finally {
+        Cleanup-TuiEngine
+    }
+}
+
+function global:Request-TuiRefresh {
+    $script:TuiState.IsDirty = $true
+}
+
+function Cleanup-TuiEngine {
+    try {
+        [Console]::CursorVisible = $true
+        [Console]::Clear()
+        [Console]::ResetColor()
+        
+        # Publish cleanup event
+        if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
+            Publish-Event -EventName "System.EngineCleanup"
+        }
+    }
+    catch {
+        Write-Host "Error during TUI cleanup: $_" -ForegroundColor Red
+    }
+}
+
+#endregion
+
+#region Screen Management
+
+function global:Push-Screen {
+    param([hashtable]$Screen)
+    if (-not $Screen) { return }
+    
+    if ($script:TuiState.CurrentScreen) {
+        if ($script:TuiState.CurrentScreen.OnExit) { 
+            & $script:TuiState.CurrentScreen.OnExit -self $script:TuiState.CurrentScreen
+        }
+        $script:TuiState.ScreenStack.Push($script:TuiState.CurrentScreen)
+    }
+    
+    $script:TuiState.CurrentScreen = $Screen
+    if ($Screen.Init) { & $Screen.Init -self $Screen }
+    
+    Request-TuiRefresh
+    
+    if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
+        Publish-Event -EventName "Screen.Pushed" -Data @{ ScreenName = $Screen.Name }
+    }
+}
+
+function global:Pop-Screen {
+    if ($script:TuiState.ScreenStack.Count -eq 0) { return $false }
+    
+    # Store the screen to exit before changing CurrentScreen
+    $screenToExit = $script:TuiState.CurrentScreen
+    
+    # Pop the new screen from the stack
+    $script:TuiState.CurrentScreen = $script:TuiState.ScreenStack.Pop()
+    
+    # Call lifecycle hooks in correct order
+    if ($screenToExit -and $screenToExit.OnExit) { 
+        & $screenToExit.OnExit -self $screenToExit
+    }
+    if ($script:TuiState.CurrentScreen -and $script:TuiState.CurrentScreen.OnResume) { 
+        & $script:TuiState.CurrentScreen.OnResume -self $script:TuiState.CurrentScreen
+    }
+    
+    Request-TuiRefresh
+    
+    if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
+        Publish-Event -EventName "Screen.Popped" -Data @{ ScreenName = $script:TuiState.CurrentScreen.Name }
+    }
+    
+    return $true
+}
+
+#endregion
+
+#region Buffer and Rendering
+
+function global:Clear-BackBuffer {
+    param([ConsoleColor]$BackgroundColor = [ConsoleColor]::Black)
+    $cell = @{ Char = ' '; FG = [ConsoleColor]::White; BG = $BackgroundColor }
+    for ($y = 0; $y -lt $script:TuiState.BufferHeight; $y++) {
+        for ($x = 0; $x -lt $script:TuiState.BufferWidth; $x++) {
+            $script:TuiState.BackBuffer[$y, $x] = $cell
+        }
+    }
+}
+
+function global:Write-BufferString {
+    param(
+        [int]$X, 
+        [int]$Y, 
+        [string]$Text, 
+        [ConsoleColor]$ForegroundColor = [ConsoleColor]::White, 
+        [ConsoleColor]$BackgroundColor = [ConsoleColor]::Black
+    )
+    if ($Y -lt 0 -or $Y -ge $script:TuiState.BufferHeight) { return }
+    if ([string]::IsNullOrEmpty($Text)) { return }
+    
+    $currentX = $X
+    foreach ($char in $Text.ToCharArray()) {
+        if ($currentX -ge 0 -and $currentX -lt $script:TuiState.BufferWidth) {
+            $script:TuiState.BackBuffer[$Y, $currentX] = @{ 
+                Char = $char
+                FG = $ForegroundColor
+                BG = $BackgroundColor 
+            }
+        }
+        $currentX++
+    }
+}
+
+function global:Write-BufferBox {
+    param(
+        [int]$X, 
+        [int]$Y, 
+        [int]$Width, 
+        [int]$Height, 
+        [string]$BorderStyle = "Single", 
+        [ConsoleColor]$BorderColor = [ConsoleColor]::White, 
+        [ConsoleColor]$BackgroundColor = [ConsoleColor]::Black, 
+        [string]$Title = ""
+    )
+    $borders = Get-BorderChars -Style $BorderStyle
+    
+    # Top border
+    Write-BufferString -X $X -Y $Y -Text "$($borders.TopLeft)$($borders.Horizontal * ($Width - 2))$($borders.TopRight)" -ForegroundColor $BorderColor -BackgroundColor $BackgroundColor
+    
+    # Title
+    if ($Title) {
+        $titleText = " $Title "
+        if ($titleText.Length > ($Width - 2)) { 
+            $titleText = " $($Title.Substring(0, $Width - 5))... " 
+        }
+        $titleX = $X + [Math]::Floor(($Width - $titleText.Length) / 2)
+        Write-BufferString -X $titleX -Y $Y -Text $titleText -ForegroundColor $BorderColor -BackgroundColor $BackgroundColor
+    }
+    
+    # Sides and Fill
+    for ($i = 1; $i -lt ($Height - 1); $i++) {
+        Write-BufferString -X $X -Y ($Y + $i) -Text $borders.Vertical -ForegroundColor $BorderColor -BackgroundColor $BackgroundColor
+        Write-BufferString -X ($X + 1) -Y ($Y + $i) -Text (' ' * ($Width - 2)) -BackgroundColor $BackgroundColor
+        Write-BufferString -X ($X + $Width - 1) -Y ($Y + $i) -Text $borders.Vertical -ForegroundColor $BorderColor -BackgroundColor $BackgroundColor
+    }
+    
+    # Bottom border
+    Write-BufferString -X $X -Y ($Y + $Height - 1) -Text "$($borders.BottomLeft)$($borders.Horizontal * ($Width - 2))$($borders.BottomRight)" -ForegroundColor $BorderColor -BackgroundColor $BackgroundColor
+}
+
+function global:Render-BufferOptimized {
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $outputBuilder = [System.Text.StringBuilder]::new(20000)
+    $lastFG = -1
+    $lastBG = -1
+    
+    # Build ANSI output with change detection
+    for ($y = 0; $y -lt $script:TuiState.BufferHeight; $y++) {
+        # Position cursor at start of line
+        $outputBuilder.Append("`e[$($y + 1);1H") | Out-Null
+        
+        for ($x = 0; $x -lt $script:TuiState.BufferWidth; $x++) {
+            $backCell = $script:TuiState.BackBuffer[$y, $x]
+            $frontCell = $script:TuiState.FrontBuffer[$y, $x]
+            
+            # Skip if cell hasn't changed
+            if ($backCell.Char -eq $frontCell.Char -and 
+                $backCell.FG -eq $frontCell.FG -and 
+                $backCell.BG -eq $frontCell.BG) {
+                continue
+            }
+            
+            # Position cursor if we skipped cells
+            if ($x -gt 0 -and $outputBuilder.Length -gt 0) {
+                $outputBuilder.Append("`e[$($y + 1);$($x + 1)H") | Out-Null
+            }
+            
+            # Update colors if changed
+            if ($backCell.FG -ne $lastFG -or $backCell.BG -ne $lastBG) {
+                $fgCode = Get-AnsiColorCode $backCell.FG
+                $bgCode = Get-AnsiColorCode $backCell.BG -IsBackground $true
+                $outputBuilder.Append("`e[${fgCode};${bgCode}m") | Out-Null
+                $lastFG = $backCell.FG
+                $lastBG = $backCell.BG
+            }
+            
+            # Append character
+            $outputBuilder.Append($backCell.Char) | Out-Null
+            
+            # Update front buffer
+            $script:TuiState.FrontBuffer[$y, $x] = $backCell.Clone()
+        }
+    }
+    
+    # Write to console using ANSI sequences
+    if ($outputBuilder.Length -gt 0) {
+        [Console]::Write($outputBuilder.ToString())
+    }
+    
+    # Update stats
+    $stopwatch.Stop()
+    $script:TuiState.RenderStats.LastFrameTime = $stopwatch.ElapsedMilliseconds
+    $script:TuiState.RenderStats.FrameCount++
+    $script:TuiState.RenderStats.TotalTime += $stopwatch.ElapsedMilliseconds
+}
+
+#endregion
+
+#region Component System
+
+function Initialize-ComponentSystem {
+    $script:TuiState.Components = @()
+    $script:TuiState.FocusedComponent = $null
+}
+
+function global:Register-Component {
+    param([hashtable]$Component)
+    
+    # Add to component registry
+    $script:TuiState.Components += $Component
+    
+    # Initialize component
+    if ($Component.Init) {
+        & $Component.Init -self $Component
+    }
+    
+    return $Component
+}
+
+function global:Set-ComponentFocus {
+    param([hashtable]$Component)
+    
+    # Blur previous component
+    if ($script:TuiState.FocusedComponent -and $script:TuiState.FocusedComponent.OnBlur) {
+        & $script:TuiState.FocusedComponent.OnBlur -self $script:TuiState.FocusedComponent
+    }
+    
+    # Focus new component
+    $script:TuiState.FocusedComponent = $Component
+    if ($Component -and $Component.OnFocus) {
+        & $Component.OnFocus -self $Component
+    }
+    
+    Request-TuiRefresh
+}
+
+function global:New-Component {
+    param(
+        [string]$Type = "Base",
+        [int]$X = 0,
+        [int]$Y = 0,
+        [int]$Width = 10,
+        [int]$Height = 1,
+        [hashtable]$Props = @{}
+    )
+    
+    $component = @{
+        Type = $Type
+        X = $X
+        Y = $Y
+        Width = $Width
+        Height = $Height
+        Visible = $true
+        Focused = $false
+        Parent = $null
+        Children = @()
+        Props = $Props
+        State = @{}
+        
+        # Lifecycle methods
+        Init = { param($self) }
+        Render = { param($self) }
+        HandleInput = { param($self, $Key) return $false }
+        OnFocus = { param($self) $self.Focused = $true }
+        OnBlur = { param($self) $self.Focused = $false }
+        Dispose = { param($self) }
+    }
+    
+    # Merge with type-specific properties
+    switch ($Type) {
+        "TextInput" { $component = Merge-Hashtables $component (Get-TextInputComponent) }
+        "Button" { $component = Merge-Hashtables $component (Get-ButtonComponent) }
+        "List" { $component = Merge-Hashtables $component (Get-ListComponent) }
+        "Table" { $component = Merge-Hashtables $component (Get-TableComponent) }
+    }
+    
+    return $component
+}
+
+function Merge-Hashtables {
+    param($Base, $Override)
+    $result = $Base.Clone()
+    foreach ($key in $Override.Keys) {
+        $result[$key] = $Override[$key]
+    }
+    return $result
+}
+
+#endregion
+
+#region Layout Management
+
+function Initialize-LayoutEngines {
+    $script:TuiState.Layouts = @{
+        Grid = Get-GridLayout
+        Stack = Get-StackLayout
+        Dock = Get-DockLayout
+    }
+}
+
+function global:Apply-Layout {
+    param(
+        [string]$LayoutType,
+        [hashtable[]]$Components,
+        [hashtable]$Options = @{}
+    )
+    
+    if ($script:TuiState.Layouts.ContainsKey($LayoutType)) {
+        $layout = $script:TuiState.Layouts[$LayoutType]
+        & $layout.Apply -Components $Components -Options $Options
+    }
+}
+
+function Get-GridLayout {
+    return @{
+        Apply = {
+            param($Components, $Options)
+            $cols = $Options.Columns ?? 2
+            $rows = [Math]::Ceiling($Components.Count / $cols)
+            $cellWidth = [Math]::Floor($script:TuiState.BufferWidth / $cols)
+            $cellHeight = [Math]::Floor($script:TuiState.BufferHeight / $rows)
+            
+            for ($i = 0; $i -lt $Components.Count; $i++) {
+                $col = $i % $cols
+                $row = [Math]::Floor($i / $cols)
+                $Components[$i].X = $col * $cellWidth
+                $Components[$i].Y = $row * $cellHeight
+                $Components[$i].Width = $cellWidth - 1
+                $Components[$i].Height = $cellHeight - 1
+            }
+        }
+    }
+}
+
+function Get-StackLayout {
+    return @{
+        Apply = {
+            param($Components, $Options)
+            $orientation = $Options.Orientation ?? "Vertical"
+            $spacing = $Options.Spacing ?? 1
+            $x = $Options.X ?? 0
+            $y = $Options.Y ?? 0
+            
+            foreach ($component in $Components) {
+                $component.X = $x
+                $component.Y = $y
+                
+                if ($orientation -eq "Vertical") {
+                    $y += $component.Height + $spacing
+                } else {
+                    $x += $component.Width + $spacing
+                }
+            }
+        }
+    }
+}
+
+function Get-DockLayout {
+    return @{
+        Apply = {
+            param($Components, $Options)
+            # Implementation for dock layout (Top, Bottom, Left, Right, Fill)
+            # This is a placeholder for the full implementation
+        }
+    }
+}
+
+#endregion
+
+#region Utility Functions
+
+function global:Get-BorderChars { 
+    param([string]$Style) 
+    $styles = @{ 
+        Single = @{ 
+            TopLeft='┌'; TopRight='┐'; BottomLeft='└'; BottomRight='┘'
+            Horizontal='─'; Vertical='│' 
+        }
+        Double = @{ 
+            TopLeft='╔'; TopRight='╗'; BottomLeft='╚'; BottomRight='╝'
+            Horizontal='═'; Vertical='║' 
+        }
+        Rounded = @{ 
+            TopLeft='╭'; TopRight='╮'; BottomLeft='╰'; BottomRight='╯'
+            Horizontal='─'; Vertical='│' 
+        } 
+    }
+    return $styles[$Style] ?? $styles.Single
+}
+
+function Get-AnsiColorCode { 
+    param([ConsoleColor]$Color, [bool]$IsBackground) 
+    $map = @{ 
+        Black=30; DarkBlue=34; DarkGreen=32; DarkCyan=36
+        DarkRed=31; DarkMagenta=35; DarkYellow=33; Gray=37
+        DarkGray=90; Blue=94; Green=92; Cyan=96
+        Red=91; Magenta=95; Yellow=93; White=97 
+    }
+    $code = $map[$Color.ToString()]
+    if ($IsBackground) { $code + 10 } else { $code } 
+}
+
+function global:Write-StatusLine { 
+    param(
+        [string]$Text, 
+        [ConsoleColor]$ForegroundColor = 'White', 
+        [ConsoleColor]$BackgroundColor = 'DarkBlue'
+    ) 
+    try { 
+        $y = $script:TuiState.BufferHeight
+        [Console]::SetCursorPosition(0, $y)
+        [Console]::ForegroundColor = $ForegroundColor
+        [Console]::BackgroundColor = $BackgroundColor
+        [Console]::Write($Text.PadRight([Console]::WindowWidth))
+        [Console]::ResetColor() 
+    } catch {} 
+}
+
+#endregion
+
+#region Component Definitions
+
+function Get-TextInputComponent {
+    return @{
+        # State
+        Value = ""
+        CursorPosition = 0
+        MaxLength = 50
+        
+        # Methods
+        Render = {
+            param($self)
+            $borderColor = if ($self.Focused) { 
+                Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan)
+            } else { 
+                Get-ThemeColor "Border" -Default ([ConsoleColor]::DarkGray)
+            }
+            
+            # Draw input box
+            Write-BufferBox -X $self.X -Y $self.Y -Width $self.Width -Height $self.Height `
+                -BorderColor $borderColor -BackgroundColor ([ConsoleColor]::Black)
+            
+            # Draw text
+            $displayText = $self.Value
+            if ($displayText.Length > ($self.Width - 3)) {
+                $displayText = $displayText.Substring($displayText.Length - ($self.Width - 3))
+            }
+            Write-BufferString -X ($self.X + 1) -Y ($self.Y + 1) -Text $displayText
+            
+            # Draw cursor if focused
+            if ($self.Focused -and $self.CursorPosition -lt ($self.Width - 3)) {
+                Write-BufferString -X ($self.X + 1 + $self.CursorPosition) -Y ($self.Y + 1) `
+                    -Text "_" -ForegroundColor ([ConsoleColor]::Yellow)
+            }
+        }
+        
+        HandleInput = {
+            param($self, $Key)
+            switch ($Key.Key) {
+                ([ConsoleKey]::Backspace) {
+                    if ($self.Value.Length -gt 0 -and $self.CursorPosition -gt 0) {
+                        $self.Value = $self.Value.Remove($self.CursorPosition - 1, 1)
+                        $self.CursorPosition--
+                    }
+                    return $true
+                }
+                ([ConsoleKey]::Delete) {
+                    if ($self.CursorPosition -lt $self.Value.Length) {
+                        $self.Value = $self.Value.Remove($self.CursorPosition, 1)
+                    }
+                    return $true
+                }
+                ([ConsoleKey]::LeftArrow) {
+                    if ($self.CursorPosition -gt 0) {
+                        $self.CursorPosition--
+                    }
+                    return $true
+                }
+                ([ConsoleKey]::RightArrow) {
+                    if ($self.CursorPosition -lt $self.Value.Length) {
+                        $self.CursorPosition++
+                    }
+                    return $true
+                }
+                ([ConsoleKey]::Home) {
+                    $self.CursorPosition = 0
+                    return $true
+                }
+                ([ConsoleKey]::End) {
+                    $self.CursorPosition = $self.Value.Length
+                    return $true
+                }
+                default {
+                    if ($Key.KeyChar -and -not [char]::IsControl($Key.KeyChar) -and 
+                        $self.Value.Length -lt $self.MaxLength) {
+                        $self.Value = $self.Value.Insert($self.CursorPosition, $Key.KeyChar)
+                        $self.CursorPosition++
+                        return $true
+                    }
+                }
+            }
+            return $false
+        }
+    }
+}
+
+function Get-ButtonComponent {
+    return @{
+        # State
+        Text = "Button"
+        
+        # Methods
+        Render = {
+            param($self)
+            $bgColor = if ($self.Focused) { 
+                Get-ThemeColor "Accent" -Default ([ConsoleColor]::DarkCyan)
+            } else { 
+                Get-ThemeColor "Primary" -Default ([ConsoleColor]::DarkGray)
+            }
+            
+            $text = " $($self.Text) "
+            if ($text.Length > $self.Width) {
+                $text = $text.Substring(0, $self.Width)
+            }
+            
+            $x = $self.X + [Math]::Floor(($self.Width - $text.Length) / 2)
+            Write-BufferString -X $x -Y $self.Y -Text $text `
+                -ForegroundColor ([ConsoleColor]::White) -BackgroundColor $bgColor
+        }
+        
+        HandleInput = {
+            param($self, $Key)
+            if ($Key.Key -eq [ConsoleKey]::Enter -or $Key.Key -eq [ConsoleKey]::Spacebar) {
+                if ($self.OnClick) {
+                    & $self.OnClick -self $self
+                }
+                return $true
+            }
+            return $false
+        }
+    }
+}
+
+function Get-TableComponent {
+    return @{
+        # State
+        Data = @()
+        Columns = @()
+        SelectedRow = 0
+        ScrollOffset = 0
+        
+        # Methods
+        Render = {
+            param($self)
+            # Simplified table rendering
+            $y = $self.Y
+            
+            # Header
+            $headerText = ""
+            foreach ($col in $self.Columns) {
+                $headerText += $col.Name.PadRight($col.Width)
+            }
+            Write-BufferString -X $self.X -Y $y -Text $headerText `
+                -ForegroundColor (Get-ThemeColor "Header" -Default ([ConsoleColor]::Cyan))
+            $y++
+            
+            # Data rows
+            $visibleRows = $self.Data | Select-Object -Skip $self.ScrollOffset -First ($self.Height - 1)
+            $rowIndex = $self.ScrollOffset
+            foreach ($row in $visibleRows) {
+                $rowText = ""
+                foreach ($col in $self.Columns) {
+                    $value = $row.($col.Property) ?? ""
+                    $rowText += $value.ToString().PadRight($col.Width)
+                }
+                
+                $fg = if ($rowIndex -eq $self.SelectedRow) {
+                    Get-ThemeColor "Selection" -Default ([ConsoleColor]::Yellow)
+                } else {
+                    Get-ThemeColor "Primary" -Default ([ConsoleColor]::White)
+                }
+                
+                Write-BufferString -X $self.X -Y $y -Text $rowText -ForegroundColor $fg
+                $y++
+                $rowIndex++
+            }
+        }
+    }
+}
+
+#endregion
+
+Export-ModuleMember -Function @(
+    'Start-TuiLoop', 'Request-TuiRefresh', 'Push-Screen', 'Pop-Screen',
+    'Write-BufferString', 'Write-BufferBox', 'Clear-BackBuffer',
+    'Write-StatusLine', 'Get-BorderChars',
+    'Register-Component', 'Set-ComponentFocus', 'New-Component', 'Apply-Layout'
+) -Variable @('TuiState')
+
+
+    'Unsubscribe-Event',
+    'Get-EventHandlers',
+    'Clear-EventHandlers',
+    'Get-EventHistory'
+)
+#
+# TUI Framework Module v3.0
+# Provides high-level abstractions for creating screens, forms, and dialogs.
+# This module simplifies UI development by managing state, focus, and layout.
+#
+
+function global:Initialize-TuiFramework {
+    # This is a placeholder for now, but could be used to register
+    # custom components or layout engines in the future.
+    Write-Verbose "TUI Framework initialized."
+}
+
+function global:Create-TuiScreen {
+    <#
+    .SYNOPSIS
+        The cornerstone of the framework. Creates a fully managed screen object.
+        It handles component creation, state management, focus cycling, and lifecycle hooks.
+    .PARAMETER Definition
+        A hashtable defining the screen's name, state, components, and behavior.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [hashtable]$Definition
+    )
+
+    # The screen object that will be returned and pushed to the TUI engine's stack.
+    $screen = @{
+        Name            = $Definition.Name ?? "Screen_$(Get-Random)"
+        State           = $Definition.State ?? @{}
+        Components      = [System.Collections.ArrayList]::new()
+        FocusableChildren = [System.Collections.ArrayList]::new()
+        FocusedChildIndex = -1
+        
+        # --- Core Lifecycle Methods ---
+
+        Init = {
+            param($self)
+            # This runs once when the screen is pushed onto the stack.
+            
+            # Create all child components from the definition.
+            foreach ($compDef in $Definition.Children) {
+                # Dynamically call the correct New-Tui* function.
+                $factory = Get-Command "New-Tui$($compDef.Type)"
+                $component = & $factory -Props $compDef.Props
+                $component.Name = $compDef.Name
+
+                $null = $self.Components.Add($component)
+                if ($component.IsFocusable) {
+                    $null = $self.FocusableChildren.Add($component)
+                }
+            }
+
+            # Set initial focus on the first focusable component.
+            if ($self.FocusableChildren.Count -gt 0) {
+                $self.FocusedChildIndex = 0
+            }
+            
+            # Call the user-defined Init scriptblock, if it exists.
+            if ($Definition.Init) {
+                & $Definition.Init -self $self
+            }
+        }
+
+        Render = {
+            param($self)
+            # The main render loop for the screen.
+            
+            # Allow a custom, top-level render for backgrounds or complex layouts.
+            if ($Definition.Render) {
+                & $Definition.Render -self $self
+            }
+
+            # Render each child component.
+            foreach ($child in $self.Components) {
+                if ($child.Visible) {
+                    # Create a temporary clone to pass state and focus information for rendering.
+                    $renderableChild = $child.Clone()
+                    
+                    # --- Data Binding (State -> Props) ---
+                    # This is a simple but powerful data-binding implementation.
+                    # It connects the screen's state to the component's properties.
+                    if ($child.Props.TextProp)       { $renderableChild.Text = $self.State.($child.Props.TextProp) }
+                    if ($child.Props.ValueProp)      { $renderableChild.Value = $self.State.($child.Props.ValueProp) }
+                    if ($child.Props.CheckedProp)    { $renderableChild.Checked = $self.State.($child.Props.CheckedProp) }
+                    if ($child.Props.ItemsProp)      { $renderableChild.Data = $self.State.($child.Props.ItemsProp) } # For Tables/Lists
+                    if ($child.Props.CursorProp)     { $renderableChild.CursorPosition = $self.State.($child.Props.CursorProp) }
+                    
+                    # Set focus state for rendering (e.g., highlight border).
+                    $focusedChild = $self.FocusableChildren[$self.FocusedChildIndex]
+                    if ($focusedChild -and $child.Name -eq $focusedChild.Name) {
+                        $renderableChild.IsFocused = $true
+                    }
+                    
+                    # Call the component's own Render method.
+                    & $renderableChild.Render -self $renderableChild
+                }
+            }
+        }
+
+        HandleInput = {
+            param($self, $Key)
+            
+            # --- Global Input Handling (Framework-Managed) ---
+            if ($Key.Key -eq [ConsoleKey]::Tab) {
+                if ($self.FocusableChildren.Count -gt 1) {
+                    $direction = if ($Key.Modifiers -band [ConsoleModifiers]::Shift) { -1 } else { 1 }
+                    $self.FocusedChildIndex = ($self.FocusedChildIndex + $direction + $self.FocusableChildren.Count) % $self.FocusableChildren.Count
+                    Request-TuiRefresh
+                    return $true
+                }
+            }
+            
+            # Pass input to the currently focused child component.
+            $focusedChild = $self.FocusableChildren[$self.FocusedChildIndex]
+            if ($focusedChild) {
+                # --- Event/Callback Handling (Props -> State) ---
+                # Clone the child and its event handlers to operate on.
+                $interactiveChild = $focusedChild.Clone()
+
+                # Wire up the OnChange handler to update the screen's state.
+                if ($interactiveChild.OnChange) {
+                    $originalOnChange = $interactiveChild.OnChange
+                    $interactiveChild.OnChange = {
+                        # This scriptblock is the "magic" of two-way binding.
+                        # It receives the change event from the component...
+                        $changeEventArgs = $args[0]
+                        # ...and updates the screen's state.
+                        if ($changeEventArgs.PSObject.Properties.Name -contains 'NewText') { $self.State.($interactiveChild.Props.TextProp) = $changeEventArgs.NewText }
+                        if ($changeEventArgs.PSObject.Properties.Name -contains 'NewValue') { $self.State.($interactiveChild.Props.ValueProp) = $changeEventArgs.NewValue }
+                        if ($changeEventArgs.PSObject.Properties.Name -contains 'Checked') { $self.State.($interactiveChild.Props.CheckedProp) = $changeEventArgs.Checked }
+                        if ($changeEventArgs.PSObject.Properties.Name -contains 'NewCursorPosition') { $self.State.($interactiveChild.Props.CursorProp) = $changeEventArgs.NewCursorPosition }
+                        
+                        # Also, call the original user-defined OnChange if it exists.
+                        & $originalOnChange $changeEventArgs
+                    }.GetNewClosure()
+                }
+
+                # If the child handles the input, we're done.
+                if (& $interactiveChild.HandleInput -self $interactiveChild -Key $Key) {
+                    return $true
+                }
+            }
+
+            # If no child handled it, let the screen's custom handler try.
+            if ($Definition.HandleInput) {
+                return & $Definition.HandleInput -self $self -Key $Key
+            }
+            
+            return $false
+        }
+    }
+
+    return $screen
+}
+
+function global:Create-TuiForm {
+    <#
+    .SYNOPSIS
+        A high-level factory for creating data entry forms.
+        It automatically generates labels and input components from a field definition.
+    #>
+    param(
+        [string]$Name,
+        [string]$Title,
+        [int]$Width = 60,
+        [int]$Height = 20,
+        [hashtable]$State,
+        [array]$Fields,
+        [scriptblock]$OnSubmit,
+        [scriptblock]$OnCancel
+    )
+
+    $children = [System.Collections.ArrayList]::new()
+    $currentY = 2
+
+    # Auto-generate components from field definitions
+    foreach ($field in $Fields) {
+        # Add Label
+        $labelProps = @{
+            X = 2
+            Y = $currentY
+            Text = "$($field.Label):"
+        }
+        $null = $children.Add(@{ Type = "Label"; Name = "$($field.Name)Label"; Props = $labelProps })
+        
+        # Add Input Component
+        $inputProps = @{
+            X = 20
+            Y = $currentY - 1 # Textbox has a border, so adjust Y
+            Width = $Width - 24
+            TextProp = $field.Name # Bind this component's text to the state property of the same name
+            CursorProp = "$($field.Name)Cursor"
+        }
+        # Add any other custom properties from the definition
+        $field.Keys | Where-Object { $_ -notin @('Name', 'Label', 'Type') } | ForEach-Object {
+            $inputProps[$_] = $field[$_]
+        }
+        $null = $children.Add(@{ Type = ($field.Type ?? 'TextBox'); Name = $field.Name; Props = $inputProps })
+        
+        $currentY += 3
+    }
+    
+    # Add Submit/Cancel Buttons
+    $null = $children.Add(@{ Type='Button'; Name='SubmitButton'; Props=@{ X=($Width/2)-16; Y=$Height-5; Width=12; Text='OK'; OnClick=$OnSubmit }})
+    $null = $children.Add(@{ Type='Button'; Name='CancelButton'; Props=@{ X=($Width/2)+4; Y=$Height-5; Width=12; Text='Cancel'; OnClick=$OnCancel }})
+    
+    # Create the screen using the framework's main factory
+    return Create-TuiScreen -Definition @{
+        Name   = $Name
+        Title  = $Title
+        State  = $State
+        Children = $children
+        Render = {
+            param($self)
+            # Forms get a standard container box
+            Write-BufferBox -X ([Math]::Floor(($TuiState.BufferWidth - $Width)/2)) -Y ([Math]::Floor(($TuiState.BufferHeight - $Height)/2)) -Width $Width -Height $Height -Title " $Title "
+        }
+    }
+}
+
+
