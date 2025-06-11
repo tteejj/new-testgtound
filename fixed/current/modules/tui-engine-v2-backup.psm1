@@ -36,7 +36,7 @@ $script:TuiState = @{
 #added for debug, may need to be higher
 Write-Host "DEBUG: [Console]::WindowWidth = $([Console]::WindowWidth)"
 Write-Host "DEBUG: [Console]::WindowHeight = $([Console]::WindowHeight)"
-# Note: Width and Height params are only available inside Initialize-TuiEngine function
+Write-Host "DEBUG: Width param = $Width, Height param = $Height"
 
 
 
@@ -104,21 +104,19 @@ function global:Initialize-TuiEngine {
         $script:TuiState.BufferWidth = $Width
         $script:TuiState.BufferHeight = $Height
         
-        # Create 2D arrays for buffers
-        $script:TuiState.FrontBuffer = New-Object 'object[,]' $Height, $Width
-        $script:TuiState.BackBuffer = New-Object 'object[,]' $Height, $Width
+        # Use regular arrays for buffers
+        $totalCells = $Height * $Width
+        $script:TuiState.FrontBuffer = New-Object 'object[]' $totalCells
+        $script:TuiState.BackBuffer = New-Object 'object[]' $totalCells
         
         # Initialize buffers with empty cells
-        $emptyCell = @{ Char = ' '; FG = [ConsoleColor]::White; BG = [ConsoleColor]::Black }
-        for ($y = 0; $y -lt $Height; $y++) {
-            for ($x = 0; $x -lt $Width; $x++) {
-                $script:TuiState.FrontBuffer[$y, $x] = @{ Char = ' '; FG = [ConsoleColor]::White; BG = [ConsoleColor]::Black }
-                $script:TuiState.BackBuffer[$y, $x] = @{ Char = ' '; FG = [ConsoleColor]::White; BG = [ConsoleColor]::Black }
-            }
+        for ($i = 0; $i -lt $totalCells; $i++) {
+            $script:TuiState.FrontBuffer[$i] = @{ Char = ' '; FG = [ConsoleColor]::White; BG = [ConsoleColor]::Black }
+            $script:TuiState.BackBuffer[$i] = @{ Char = ' '; FG = [ConsoleColor]::White; BG = [ConsoleColor]::Black }
         }
         
         [Console]::CursorVisible = $false
-        # [Console]::Clear() # Commented out to avoid screen flicker
+#``        [Console]::Clear()
         
         # Initialize subsystems with error handling
         try { Initialize-LayoutEngines } catch { Write-Warning "Layout engines init failed: $_" }
@@ -128,13 +126,19 @@ function global:Initialize-TuiEngine {
         $script:TuiState.EventHandlers = @{}
         
         # --- THE FIX: HOOK CTRL+C *BEFORE* STARTING THE INPUT THREAD ---
-        # Temporarily disabled due to compatibility issues
-        # TODO: Re-enable with proper PowerShell event handling
+        # The main thread must establish control of the console before another thread tries to read from it.
         try {
             [Console]::TreatControlCAsInput = $false
-            # Ctrl+C handler temporarily disabled - will terminate process normally
-        } catch {
-            Write-Warning "Could not set console input mode: $_"
+            $null = [Console]::CancelKeyPress.Add([ConsoleCancelEventHandler]{
+                param($sender, $e)
+                $e.Cancel = $true
+                $script:TuiState.Running = $false
+                if ($script:TuiState.CancellationTokenSource) {
+                    $script:TuiState.CancellationTokenSource.Cancel()
+                }
+            })
+        } catch [System.IO.IOException] {
+            Write-Warning "Could not hook Ctrl+C handler (likely running in a restricted console like VS Code Integrated Terminal). Ctrl+C will terminate the process directly."
         }
         
         # Now it is safe to start the input thread.
@@ -467,11 +471,6 @@ function Cleanup-EventHandlers {
         try { Unsubscribe-Event -HandlerId $handlerId } catch { }
     }
     $script:TuiState.EventHandlers.Clear()
-    
-    # Clean up any Ctrl+C event handler if it exists
-    try {
-        Get-EventSubscriber -SourceIdentifier "TuiCtrlC" -ErrorAction SilentlyContinue | Unregister-Event
-    } catch { }
 }
 
 function Safe-PublishEvent {
@@ -585,16 +584,18 @@ function global:Pop-Screen {
 
 #region Buffer and Rendering
 
-# GetBufferIndex no longer needed - using 2D arrays directly
+function GetBufferIndex {
+    param([int]$X, [int]$Y)
+    return $Y * $script:TuiState.BufferWidth + $X
+}
 
 function global:Clear-BackBuffer {
     param([ConsoleColor]$BackgroundColor = [ConsoleColor]::Black)
     
-    $cell = @{ Char = ' '; FG = [ConsoleColor]::White; BG = $BackgroundColor }
-    for ($y = 0; $y -lt $script:TuiState.BufferHeight; $y++) {
-        for ($x = 0; $x -lt $script:TuiState.BufferWidth; $x++) {
-            $script:TuiState.BackBuffer[$y, $x] = $cell
-        }
+    $totalCells = $script:TuiState.BufferHeight * $script:TuiState.BufferWidth
+    
+    for ($i = 0; $i -lt $totalCells; $i++) {
+        $script:TuiState.BackBuffer[$i] = @{ Char = ' '; FG = [ConsoleColor]::White; BG = $BackgroundColor }
     }
 }
 
@@ -612,7 +613,8 @@ function global:Write-BufferString {
     $currentX = $X
     foreach ($char in $Text.ToCharArray()) {
         if ($currentX -ge 0 -and $currentX -lt $script:TuiState.BufferWidth) {
-            $script:TuiState.BackBuffer[$Y, $currentX] = @{ 
+            $index = GetBufferIndex -X $currentX -Y $Y
+            $script:TuiState.BackBuffer[$index] = @{ 
                 Char = $char
                 FG = $ForegroundColor
                 BG = $BackgroundColor 
@@ -672,8 +674,9 @@ function global:Render-BufferOptimized {
             $outputBuilder.Append("`e[$($y + 1);1H") | Out-Null
             
             for ($x = 0; $x -lt $script:TuiState.BufferWidth; $x++) {
-                $backCell = $script:TuiState.BackBuffer[$y, $x]
-                $frontCell = $script:TuiState.FrontBuffer[$y, $x]
+                $index = GetBufferIndex -X $x -Y $y
+                $backCell = $script:TuiState.BackBuffer[$index]
+                $frontCell = $script:TuiState.FrontBuffer[$index]
                 
                 # Skip if cell hasn't changed
                 if ($backCell.Char -eq $frontCell.Char -and 
@@ -700,7 +703,7 @@ function global:Render-BufferOptimized {
                 $outputBuilder.Append($backCell.Char) | Out-Null
                 
                 # Update front buffer
-                $script:TuiState.FrontBuffer[$y, $x] = @{
+                $script:TuiState.FrontBuffer[$index] = @{
                     Char = $backCell.Char
                     FG = $backCell.FG
                     BG = $backCell.BG
