@@ -137,7 +137,7 @@ function global:Initialize-DataEventHandlers {
     #>
     
     # Time Entry Creation
-    Subscribe-Event -EventName "Data.Create.TimeEntry" -Handler {
+    $null = Subscribe-Event -EventName "Data.Create.TimeEntry" -Handler {
         param($EventData)
         $data = $EventData.Data
         
@@ -150,8 +150,8 @@ function global:Initialize-DataEventHandlers {
                 Id = New-Guid
                 ProjectKey = $data.Project
                 Hours = [double]$data.Hours
-                Description = $data.Description ?? ""
-                Date = $data.Date ?? (Get-Date).ToString("yyyy-MM-dd")
+                Description = if ($data.Description) { $data.Description } else { "" }
+                Date = if ($data.Date) { $data.Date } else { (Get-Date).ToString("yyyy-MM-dd") }
                 EnteredAt = (Get-Date).ToString("o")
                 TaskId = $data.TaskId
             }
@@ -179,7 +179,7 @@ function global:Initialize-DataEventHandlers {
     }
     
     # Project Creation
-    Subscribe-Event -EventName "Data.Create.Project" -Handler {
+    $null = Subscribe-Event -EventName "Data.Create.Project" -Handler {
         param($EventData)
         $data = $EventData.Data
         
@@ -194,12 +194,12 @@ function global:Initialize-DataEventHandlers {
             $newProject = @{
                 Key = $data.Key
                 Name = $data.Name
-                Client = $data.Client ?? ""
-                BillingType = $data.BillingType ?? "NonBillable"
-                Rate = [double]($data.Rate ?? 0)
-                Budget = [double]($data.Budget ?? 0)
-                Id1 = $data.Id1 ?? ""
-                Id2 = $data.Id2 ?? ""
+                Client = if ($data.Client) { $data.Client } else { "" }
+                BillingType = if ($data.BillingType) { $data.BillingType } else { "NonBillable" }
+                Rate = [double](if ($data.Rate) { $data.Rate } else { 0 })
+                Budget = [double](if ($data.Budget) { $data.Budget } else { 0 })
+                Id1 = if ($data.Id1) { $data.Id1 } else { "" }
+                Id2 = if ($data.Id2) { $data.Id2 } else { "" }
                 CreatedAt = (Get-Date).ToString("o")
                 Active = $true
             }
@@ -227,7 +227,7 @@ function global:Initialize-DataEventHandlers {
     }
     
     # Task Creation
-    Subscribe-Event -EventName "Data.Create.Task" -Handler {
+    $null = Subscribe-Event -EventName "Data.Create.Task" -Handler {
         param($EventData)
         $data = $EventData.Data
         
@@ -238,9 +238,9 @@ function global:Initialize-DataEventHandlers {
                 Id = New-Guid
                 Description = $data.Description
                 ProjectKey = $data.ProjectKey
-                Priority = $data.Priority ?? "Medium"
+                Priority = if ($data.Priority) { $data.Priority } else { "Medium" }
                 DueDate = $data.DueDate
-                Tags = @($data.Tags ?? @())
+                Tags = @(if ($data.Tags) { $data.Tags } else { @() })
                 Completed = $false
                 CreatedAt = (Get-Date).ToString("o")
                 Progress = 0
@@ -269,7 +269,7 @@ function global:Initialize-DataEventHandlers {
     }
     
     # Timer Start
-    Subscribe-Event -EventName "Data.Timer.Start" -Handler {
+    $null = Subscribe-Event -EventName "Data.Timer.Start" -Handler {
         param($EventData)
         $data = $EventData.Data
         
@@ -282,7 +282,7 @@ function global:Initialize-DataEventHandlers {
                 Key = $timerKey
                 ProjectKey = $data.ProjectKey
                 TaskId = $data.TaskId
-                Description = $data.Description ?? ""
+                Description = if ($data.Description) { $data.Description } else { "" }
                 StartTime = (Get-Date).ToString("o")
             }
             
@@ -310,7 +310,7 @@ function global:Initialize-DataEventHandlers {
     }
     
     # Timer Stop
-    Subscribe-Event -EventName "Data.Timer.Stop" -Handler {
+    $null = Subscribe-Event -EventName "Data.Timer.Stop" -Handler {
         param($EventData)
         $data = $EventData.Data
         
@@ -364,7 +364,7 @@ function global:Initialize-DataEventHandlers {
     }
     
     # Stop All Timers
-    Subscribe-Event -EventName "Data.Timer.StopAll" -Handler {
+    $null = Subscribe-Event -EventName "Data.Timer.StopAll" -Handler {
         param($EventData)
         
         $timerKeys = @($script:Data.ActiveTimers.Keys)

@@ -18,12 +18,14 @@ $script:TuiState = @{
     Layouts         = @{}
     FocusedComponent = $null
     
-    # Thread-safe input queue
+    # Thread-safe input queue and runspace management
     InputQueue = $null
-    StopRequested = $false
     InputRunspace = $null
     InputPowerShell = $null
     InputAsyncResult = $null
+    
+    # The correct, thread-safe object for signalling shutdown.
+    CancellationTokenSource = $null
     
     # Event cleanup tracking
     EventHandlers = @{}
@@ -96,16 +98,13 @@ function global:Initialize-TuiEngine {
         }
         
         [Console]::CursorVisible = $false
-        [Console]::Clear()
+#``        [Console]::Clear()
         
         # Initialize subsystems with error handling
         try { Initialize-LayoutEngines } catch { Write-Warning "Layout engines init failed: $_" }
         try { Initialize-ComponentSystem } catch { Write-Warning "Component system init failed: $_" }
         
-        # Initialize external modules if available
-        if (Get-Command -Name "Initialize-ThemeManager" -ErrorAction SilentlyContinue) {
-            try { Initialize-ThemeManager } catch { Write-Warning "Theme manager init failed: $_" }
-        }
+        # --- THE FIX: INITIALIZE EVENT SYSTEM *BEFORE* ANY MODULE THAT USES IT ---
         if (Get-Command -Name "Initialize-EventSystem" -ErrorAction SilentlyContinue) {
             try { 
                 Initialize-EventSystem 
@@ -113,8 +112,27 @@ function global:Initialize-TuiEngine {
                 $script:TuiState.EventHandlers = @{}
             } catch { Write-Warning "Event system init failed: $_" }
         }
+        if (Get-Command -Name "Initialize-ThemeManager" -ErrorAction SilentlyContinue) {
+            try { Initialize-ThemeManager } catch { Write-Warning "Theme manager init failed: $_" }
+        }
         
-        # Start input thread for non-blocking input
+        # --- THE FIX: HOOK CTRL+C *BEFORE* STARTING THE INPUT THREAD ---
+        # The main thread must establish control of the console before another thread tries to read from it.
+        try {
+            [Console]::TreatControlCAsInput = $false
+            $null = [Console]::CancelKeyPress.Add([ConsoleCancelEventHandler]{
+                param($sender, $e)
+                $e.Cancel = $true
+                $script:TuiState.Running = $false
+                if ($script:TuiState.CancellationTokenSource) {
+                    $script:TuiState.CancellationTokenSource.Cancel()
+                }
+            })
+        } catch [System.IO.IOException] {
+            Write-Warning "Could not hook Ctrl+C handler (likely running in a restricted console like VS Code Integrated Terminal). Ctrl+C will terminate the process directly."
+        }
+        
+        # Now it is safe to start the input thread.
         Initialize-InputThread
         
         # Publish initialization event
@@ -124,74 +142,79 @@ function global:Initialize-TuiEngine {
         $global:TuiState = $script:TuiState
     }
     catch {
-        Write-Host "FATAL: Failed to initialize TUI Engine: $_" -ForegroundColor Red
-        throw
+        # --- ENHANCED DIAGNOSTIC BLOCK ---
+        # This will now clearly print the root cause of any initialization failure.
+        Write-Host "--------------------------------------------------------" -ForegroundColor Red
+        Write-Host "IMMEDIATE, ORIGINAL ERROR DETECTED DURING INITIALIZATION" -ForegroundColor Red
+        Write-Host "THE *REAL* PROBLEM IS LIKELY THIS:" -ForegroundColor Yellow
+        
+        Write-Host "MESSAGE: $($_.Exception.Message)" -ForegroundColor White
+        
+        Write-Host "FULL ERROR:" -ForegroundColor Yellow
+        $_.Exception | Format-List * -Force
+        
+        Write-Host "--------------------------------------------------------" -ForegroundColor Red
+        
+        # Re-throw the exception so the main script's finally block is triggered for cleanup.
+        throw "FATAL: TUI Engine initialization failed. See original error details above."
     }
 }
 
 function Initialize-InputThread {
     # Create thread-safe input handling
-    $script:TuiState.StopRequested = $false
-    
-    # Initialize input queue with proper generic type creation
     $queueType = [System.Collections.Concurrent.ConcurrentQueue[System.ConsoleKeyInfo]]
     $script:TuiState.InputQueue = New-Object $queueType
     
-    # Create runspace for input handling instead of thread
-    $runspace = [runspacefactory]::CreateRunspace()
+    # Create the cancellation token source for thread-safe shutdown.
+    $script:TuiState.CancellationTokenSource = [System.Threading.CancellationTokenSource]::new()
+    $token = $script:TuiState.CancellationTokenSource.Token
+
+    # Create runspace for input handling (fully-qualified .NET types)
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
     $runspace.Open()
     $runspace.SessionStateProxy.SetVariable('InputQueue', $script:TuiState.InputQueue)
-    $runspace.SessionStateProxy.SetVariable('StopRequested', [ref]$script:TuiState.StopRequested)
+    $runspace.SessionStateProxy.SetVariable('token', $token)
     
-    $ps = [powershell]::Create()
+    # Create a PowerShell instance in that runspace
+    $ps = [System.Management.Automation.PowerShell]::Create()
     $ps.Runspace = $runspace
     
+    # This script block will run in the background.
     $ps.AddScript({
-        while (-not $StopRequested.Value) {
-            try {
+        try {
+            while (-not $token.IsCancellationRequested) {
                 if ([Console]::KeyAvailable) {
                     $keyInfo = [Console]::ReadKey($true)
-                    if ($InputQueue.Count -lt 100) {  # Prevent queue overflow
+                    if ($InputQueue.Count -lt 100) {
                         $InputQueue.Enqueue($keyInfo)
                     }
                 }
                 else {
-                    Start-Sleep -Milliseconds 10
+                    Start-Sleep -Milliseconds 20
                 }
             }
-            catch {
-                # Handle console input errors gracefully
-                if (-not $StopRequested.Value) {
-                    Start-Sleep -Milliseconds 50
-                }
-            }
+        }
+        catch [System.Management.Automation.PipelineStoppedException] {
+            return
+        }
+        catch {
+            Write-Warning "Input thread error: $_"
         }
     }) | Out-Null
     
     # Store for cleanup
-    $script:TuiState.InputRunspace = $runspace
+    $script:TuiState.InputRunspace   = $runspace
     $script:TuiState.InputPowerShell = $ps
     $script:TuiState.InputAsyncResult = $ps.BeginInvoke()
-    
-    # Hook Ctrl+C for clean shutdown
-    try {
-        [Console]::TreatControlCAsInput = $false
-        $null = [Console]::CancelKeyPress.Add([ConsoleCancelEventHandler]{
-            param($sender, $e)
-            $e.Cancel = $true  # Don't terminate process
-            $script:TuiState.StopRequested = $true
-            $script:TuiState.Running = $false
-        })
-    }
-    catch {
-        # If CancelKeyPress is already hooked, ignore
-    }
 }
 
 function Process-TuiInput {
     # Process all queued input events
     $processedAny = $false
-    $keyInfo = $null
+    # Check if the queue exists before trying to use it.
+    if (-not $script:TuiState.InputQueue) { return $false }
+
+    $keyInfo = [System.ConsoleKeyInfo]::new([char]0, [System.ConsoleKey]::None, $false, $false, $false)
     
     while ($script:TuiState.InputQueue.TryDequeue([ref]$keyInfo)) {
         $processedAny = $true
@@ -224,7 +247,9 @@ function Process-TuiInput {
                         "Back" { Pop-Screen }
                         "Quit" { 
                             $script:TuiState.Running = $false
-                            $script:TuiState.StopRequested = $true
+                            if ($script:TuiState.CancellationTokenSource) {
+                                $script:TuiState.CancellationTokenSource.Cancel()
+                            }
                         }
                     }
                 } catch {
@@ -261,7 +286,7 @@ function global:Start-TuiLoop {
         $frameTime = New-Object System.Diagnostics.Stopwatch
         $targetFrameTime = 1000.0 / $script:TuiState.RenderStats.TargetFPS
         
-        while ($script:TuiState.Running -and -not $script:TuiState.StopRequested) {
+        while ($script:TuiState.Running) {
             $frameTime.Restart()
             
             try {
@@ -284,11 +309,7 @@ function global:Start-TuiLoop {
                 if ($elapsed -lt $targetFrameTime) {
                     $sleepTime = [Math]::Max(1, $targetFrameTime - $elapsed)
                     Start-Sleep -Milliseconds $sleepTime
-                } else {
-                    # If we're running behind, just yield briefly
-                    Start-Sleep -Milliseconds 1
                 }
-                
             } catch {
                 Write-Warning "Main loop error: $_"
                 $script:TuiState.IsDirty = $true  # Force redraw on error
@@ -344,70 +365,61 @@ function global:Request-TuiRefresh {
 
 function Cleanup-TuiEngine {
     try {
-        # Stop input handling
-        $script:TuiState.StopRequested = $true
-        
-        # Clean up input runspace
-        if ($script:TuiState.InputPowerShell -and $script:TuiState.InputAsyncResult) {
-            try {
-                $script:TuiState.InputPowerShell.Stop()
-                $script:TuiState.InputPowerShell.EndInvoke($script:TuiState.InputAsyncResult)
-                $script:TuiState.InputPowerShell.Dispose()
+        # --- ROBUST CLEANUP ROUTINE ---
+        # This sequence is defensive and will not fail even if initialization was partial.
+        if ($script:TuiState.CancellationTokenSource -and -not $script:TuiState.CancellationTokenSource.IsCancellationRequested) {
+            $script:TuiState.CancellationTokenSource.Cancel()
+        }
+
+        if ($script:TuiState.InputPowerShell) {
+            if ($script:TuiState.InputAsyncResult) {
+                try { $script:TuiState.InputPowerShell.EndInvoke($script:TuiState.InputAsyncResult) } catch { }
             }
-            catch {
-                # Ignore errors during cleanup
-            }
+            try { $script:TuiState.InputPowerShell.Dispose() } catch { }
         }
         
         if ($script:TuiState.InputRunspace) {
-            try {
-                $script:TuiState.InputRunspace.Close()
-                $script:TuiState.InputRunspace.Dispose()
-            }
-            catch {
-                # Ignore errors during cleanup
-            }
+            try { $script:TuiState.InputRunspace.Dispose() } catch { }
         }
         
-        # Cleanup event handlers
+        if ($script:TuiState.CancellationTokenSource) {
+            try { $script:TuiState.CancellationTokenSource.Dispose() } catch { }
+        }
+
         Cleanup-EventHandlers
         
-        # Reset console
-        [Console]::Write("`e[0m")  # Reset ANSI formatting
-        [Console]::CursorVisible = $true
-        [Console]::Clear()
-        [Console]::ResetColor()
-        
-        # Publish cleanup event
-        Safe-PublishEvent -EventName "System.EngineCleanup"
-        
+        # Only try to reset the console if we are in an interactive session
+        if (-not $env:CI -and -not $PSScriptRoot) {
+            try {
+                if ([System.Environment]::UserInteractive) {
+                    [Console]::Write("`e[0m")
+                    [Console]::CursorVisible = $true
+                    [Console]::Clear()
+                    [Console]::ResetColor()
+                }
+            } catch {
+                # This can fail in non-interactive environments, ignore the error.
+            }
+        }
     } catch {
-        Write-Host "Error during TUI cleanup: $_" -ForegroundColor Red
+        Write-Warning "A secondary error occurred during TUI cleanup: $_"
     }
 }
 
 function Cleanup-EventHandlers {
     if (-not (Get-Command -Name "Unsubscribe-Event" -ErrorAction SilentlyContinue)) { return }
-    
+    if (-not $script:TuiState.EventHandlers) { return }
+
     foreach ($handlerId in $script:TuiState.EventHandlers.Values) {
-        try {
-            Unsubscribe-Event -HandlerId $handlerId
-        } catch {
-            Write-Warning "Failed to unsubscribe event handler: $_"
-        }
+        try { Unsubscribe-Event -HandlerId $handlerId } catch { }
     }
-    
     $script:TuiState.EventHandlers.Clear()
 }
 
 function Safe-PublishEvent {
     param($EventName, $Data)
     if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
-        try {
-            Publish-Event -EventName $EventName -Data $Data
-        } catch {
-            Write-Warning "Event publish failed: $_"
-        }
+        try { Publish-Event -EventName $EventName -Data $Data } catch { }
     }
 }
 

@@ -109,13 +109,23 @@ function Start-PMCTerminal {
         
         Write-Host "`nInitializing subsystems..." -ForegroundColor Cyan
         
-        # Initialize core systems
+        # Initialize core systems in correct order
+        # Event system MUST be first as other systems depend on it
         Initialize-EventSystem
+        
+        # Theme manager and data manager can initialize after events
         Initialize-ThemeManager
         Initialize-DataManager
-        Load-UnifiedData
-        Initialize-DialogSystem
+        
+        # TUI Engine MUST be initialized BEFORE dialog system
+        # as dialog system uses TUI functions
         Initialize-TuiEngine
+        
+        # Dialog system depends on TUI engine
+        Initialize-DialogSystem
+        
+        # Load data after all systems are initialized
+        Load-UnifiedData
         
         # Initialize optional framework
         if (Get-Command -Name "Initialize-TuiFramework" -ErrorAction SilentlyContinue) {

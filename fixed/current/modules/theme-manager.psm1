@@ -136,16 +136,24 @@ function global:Set-TuiTheme {
     if ($script:Themes.ContainsKey($ThemeName)) {
         $script:CurrentTheme = $script:Themes[$ThemeName]
         
-        # Apply console colors
-        $Host.UI.RawUI.BackgroundColor = $script:CurrentTheme.Colors.Background
-        $Host.UI.RawUI.ForegroundColor = $script:CurrentTheme.Colors.Foreground
+        # --- FIX ---
+        # Defensively check if RawUI exists. In some environments (like the VS Code
+        # Integrated Console), it can be $null and cause a crash.
+        if ($Host.UI.RawUI) {
+            # Apply console colors
+            $Host.UI.RawUI.BackgroundColor = $script:CurrentTheme.Colors.Background
+            $Host.UI.RawUI.ForegroundColor = $script:CurrentTheme.Colors.Foreground
+        }
         
         Write-Verbose "Theme set to: $ThemeName"
         
         # Publish theme change event
-        Publish-Event -EventName "Theme.Changed" -Data @{ 
-            ThemeName = $ThemeName
-            Theme = $script:CurrentTheme 
+        # Check if Publish-Event exists before calling it
+        if (Get-Command -Name Publish-Event -ErrorAction SilentlyContinue) {
+            Publish-Event -EventName "Theme.Changed" -Data @{ 
+                ThemeName = $ThemeName
+                Theme = $script:CurrentTheme 
+            }
         }
     } else {
         Write-Warning "Theme not found: $ThemeName"

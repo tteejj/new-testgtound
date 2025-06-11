@@ -1,0 +1,103 @@
+#
+# File: dashboard-screen.psm1 (v3.4 - Framework-Compliant)
+# This screen is built correctly using the Create-TuiScreen factory.
+#
+
+function global:Get-DashboardScreen {
+    
+    # We define the entire screen in this single hashtable.
+    # The framework handles the rest.
+    return Create-TuiScreen -Definition @{
+        Name = "DashboardScreen"
+
+        # The single source of truth for all dynamic data on THIS screen.
+        State = @{
+            ActiveTimers = @()
+            TodaysTasks = @()
+            RecentEntries = @()
+            QuickStats = @{}
+            QuickActions = @( 
+                @{ Name = "Add Time Entry"; Action = { Show-AlertDialog -Title "Not Implemented" -Message "This screen has not been created yet." } },
+                @{ Name = "Manage Tasks"; Action = { Show-AlertDialog -Title "Not Implemented" -Message "This screen has not been created yet." } },
+                @{ Name = "View Reports"; Action = { Show-AlertDialog -Title "Not Implemented" -Message "This screen has not been created yet." } },
+                @{ Name = "Settings"; Action = { Show-AlertDialog -Title "Not Implemented" -Message "This screen has not been created yet." } }
+            )
+            SelectedQuickAction = 0 # This will be bound to the TuiTable component
+        }
+
+        # Runs ONCE when the screen is displayed. Populates the State.
+        Init = {
+            param($self) 
+            if ($global:Data) {
+                $self.State.ActiveTimers = if ($global:Data.ActiveTimers) { @($global:Data.ActiveTimers.GetEnumerator() | Select-Object -First 5) } else { @() }
+                $today = (Get-Date).ToString("yyyy-MM-dd")
+                $self.State.TodaysTasks = if ($global:Data.Tasks) { @($global:Data.Tasks | Where-Object { (-not $_.Completed) -and ($_.DueDate -eq $today -or [string]::IsNullOrEmpty($_.DueDate)) } | Select-Object -First 5) } else { @() }
+                $self.State.RecentEntries = if ($global:Data.TimeEntries) { @($global:Data.TimeEntries | Select-Object -Last 5) } else { @() }
+                
+                $todayEntries = if ($global:Data.TimeEntries) { @($global:Data.TimeEntries | Where-Object { $_.Date -eq $today }) } else { @() }
+                $todayHours = ($todayEntries | Measure-Object -Property Hours -Sum).Sum
+                $self.State.QuickStats = @{ 
+                    TodayHours = if ($todayHours) { [math]::Round($todayHours,1) } else { 0 }
+                    ActiveTasks = if ($global:Data.Tasks) { @($global:Data.Tasks | Where-Object { -not $_.Completed }).Count } else { 0 }
+                    RunningTimers = if ($global:Data.ActiveTimers) { $global:Data.ActiveTimers.Count } else { 0 }
+                }
+            }
+        }
+
+        # Renders the static parts of the UI (backgrounds, boxes, text).
+        Render = {
+            param($self)
+            
+            Write-BufferString -X 2 -Y 1 -Text "PMC Terminal - $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -ForegroundColor "Cyan"
+            if ($self.State.QuickStats.RunningTimers -gt 0) { Write-BufferString -X 60 -Y 1 -Text "[TIMER ACTIVE]" -ForegroundColor "Red" }
+            
+            Write-BufferBox -X 2 -Y 3 -Width 25 -Height 10 -Title " Quick Actions " -BorderColor "Yellow"
+            Write-BufferBox -X 30 -Y 3 -Width 25 -Height 10 -Title " Quick Stats " -BorderColor "Green"
+            Write-BufferBox -X 58 -Y 3 -Width 25 -Height 10 -Title " Active Timers " -BorderColor "Cyan"
+            Write-BufferBox -X 2 -Y 14 -Width 40 -Height 8 -Title " Recent Time Entries " -BorderColor "Blue"
+            Write-BufferBox -X 44 -Y 14 -Width 39 -Height 8 -Title " Today's Tasks " -BorderColor "Magenta"
+            Write-BufferString -X 2 -Y 23 -Text "Arrows/Enter to use list. R to refresh. Q to quit." -ForegroundColor "Gray"
+            
+            $stats = $self.State.QuickStats
+            Write-BufferString -X 32 -Y 5 -Text "Today's Hours: $($stats.TodayHours)h" -ForegroundColor (Get-ThemeColor "Success")
+            Write-BufferString -X 32 -Y 7 -Text "Active Tasks:  $($stats.ActiveTasks)" -ForegroundColor (Get-ThemeColor "Warning")
+            Write-BufferString -X 32 -Y 9 -Text "Running Timers: $($stats.RunningTimers)" -ForegroundColor (Get-ThemeColor "Accent")
+
+            $y = 5; foreach ($timer in $self.State.ActiveTimers) { if($timer.Value -and $timer.Value.Description) { Write-BufferString -X 60 -Y $y -Text $timer.Value.Description.Substring(0, [math]::Min(20, $timer.Value.Description.Length)) }; $y++ }
+            $y = 16; foreach ($entry in $self.State.RecentEntries) { if($entry -and $entry.Description) { $desc = "$($entry.Date): $($entry.Hours)h - $($entry.Description)"; Write-BufferString -X 4 -Y $y -Text $desc.Substring(0, [math]::Min(35, $desc.Length)) }; $y++ }
+            $y = 16; foreach ($task in $self.State.TodaysTasks) { if($task -and $task.Description) { Write-BufferString -X 46 -Y $y -Text "- $($task.Description.Substring(0, [math]::Min(34, $task.Description.Length)))" }; $y++ }
+        }
+
+        # Handles global key presses not caught by a component.
+        HandleInput = {
+            param($self, $Key)
+            switch ($Key.Key) {
+                ([ConsoleKey]::Q) { return "Quit" }
+                ([ConsoleKey]::R) { & $self.Init($self); Request-TuiRefresh; return $true }
+            }
+            return $false
+        }
+        
+        # Declarative list of all INTERACTIVE components on the screen.
+        Children = @(
+            @{
+                Type = 'Table' # Using TuiTable as a powerful listbox
+                Name = 'QuickActionsList'
+                Props = @{
+                    X = 3; Y = 4; Width = 23; Height = 8
+                    # --- Data Binding ---
+                    RowsProp = 'QuickActions'           # The table's data comes from $self.State.QuickActions
+                    SelectedRowProp = 'SelectedQuickAction' # The table's selection is bound to $self.State.SelectedQuickAction
+                    # --- Configuration ---
+                    Columns = @( @{ Name = 'Name'; Width = 21 } )
+                    ShowHeader = $false
+                    # --- Event Handling ---
+                    OnRowSelect = {
+                        param($event)
+                        & $event.Row.Action
+                    }
+                }
+            }
+        )
+    }
+}

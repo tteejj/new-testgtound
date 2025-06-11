@@ -105,6 +105,7 @@ function global:Subscribe-Event {
     
     Write-Verbose "Subscribed to event: $EventName (Handler: $HandlerId)"
     
+    # Only return handler ID, don't print it
     return $HandlerId
 }
 
