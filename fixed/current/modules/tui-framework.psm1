@@ -1,5 +1,5 @@
-# TUI Framework Integration Module
-# Provides high-level integration between TUI engine, components, and layout systems
+# TUI Framework Integration Module - FIXED VERSION
+# Addresses critical performance issues and architectural conflicts
 
 $script:ComponentRegistry = @{}
 $script:LayoutCache = @{}
@@ -15,30 +15,53 @@ function global:Initialize-TuiFramework {
         throw "TUI Engine must be initialized before framework"
     }
     
-    # Initialize component registry
+    # Initialize component registry with factories
     $script:ComponentRegistry = @{
-        Base = { New-TuiComponent @args }
-        Label = { New-TuiLabel @args }
-        Button = { New-TuiButton @args }
-        TextBox = { New-TuiTextBox @args }
-        TextArea = { New-TuiTextArea @args }
-        CheckBox = { New-TuiCheckBox @args }
-        Dropdown = { New-TuiDropdown @args }
-        SearchableDropdown = { New-TuiSearchableDropdown @args }
-        Table = { New-TuiTable @args }
-        ProgressBar = { New-TuiProgressBar @args }
-        DatePicker = { New-TuiDatePicker @args }
-        TimePicker = { New-TuiTimePicker @args }
-        CalendarPicker = { New-TuiCalendarPicker @args }
-        NumberInput = { New-TuiNumberInput @args }
-        Slider = { New-TuiSlider @args }
-        MultiSelect = { New-TuiMultiSelect @args }
-        Chart = { New-TuiChart @args }
-        Toast = { New-TuiToast @args }
-        Dialog = { New-TuiDialog @args }
+        Base = { param($Props) New-TuiComponent @Props }
+        Label = { param($Props) New-TuiLabel @Props }
+        Button = { param($Props) New-TuiButton @Props }
+        TextBox = { param($Props) New-TuiTextBox @Props }
+        TextArea = { param($Props) New-TuiTextArea @Props }
+        CheckBox = { param($Props) New-TuiCheckBox @Props }
+        Dropdown = { param($Props) New-TuiDropdown @Props }
+        SearchableDropdown = { param($Props) New-TuiSearchableDropdown @Props }
+        Table = { param($Props) New-TuiTable @Props }
+        ProgressBar = { param($Props) New-TuiProgressBar @Props }
+        DatePicker = { param($Props) New-TuiDatePicker @Props }
+        TimePicker = { param($Props) New-TuiTimePicker @Props }
+        CalendarPicker = { param($Props) New-TuiCalendarPicker @Props }
+        NumberInput = { param($Props) New-TuiNumberInput @Props }
+        Slider = { param($Props) New-TuiSlider @Props }
+        MultiSelect = { param($Props) New-TuiMultiSelect @Props }
+        Chart = { param($Props) New-TuiChart @Props }
+        Toast = { param($Props) New-TuiToast @Props }
+        Dialog = { param($Props) New-TuiDialog @Props }
     }
     
     Write-Verbose "TUI Framework initialized with $($script:ComponentRegistry.Count) component types"
+}
+
+function global:Register-TuiComponentType {
+    <#
+    .SYNOPSIS
+    Registers a component type with the framework
+    
+    .PARAMETER Type
+    The component type name
+    
+    .PARAMETER Factory
+    The factory scriptblock that creates the component
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Type,
+        
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Factory
+    )
+    
+    $script:ComponentRegistry[$Type] = $Factory
+    Write-Verbose "Registered component type: $Type"
 }
 
 function global:Create-TuiComponent {
@@ -79,6 +102,7 @@ function global:Create-TuiScreen {
     <#
     .SYNOPSIS
     Creates a screen with automatic component management
+    FIXED: No more cloning, uses stateful components with dynamic focus
     
     .PARAMETER Definition
     Screen definition hashtable
@@ -88,7 +112,6 @@ function global:Create-TuiScreen {
         [hashtable]$Definition
     )
 
-    # PowerShell 5 compatible null checks
     $screen = @{
         Name              = if ($Definition.Name) { $Definition.Name } else { "Screen_$(Get-Random)" }
         State             = if ($Definition.State) { $Definition.State } else { @{} }
@@ -97,27 +120,72 @@ function global:Create-TuiScreen {
         _focusedIndex     = -1
         Layout            = if ($Definition.Layout) { $Definition.Layout } else { "Manual" }
         LayoutOptions     = if ($Definition.LayoutOptions) { $Definition.LayoutOptions } else { @{} }
+        Bindings          = if ($Definition.Bindings) { $Definition.Bindings } else { @{} }
 
         Init = {
             param($self)
             
-            # Instantiate all child components from the definition.
-            if ($Definition.Children) {
-                foreach ($compDef in $Definition.Children) {
-                    $factoryCommand = "New-Tui$($compDef.Type)"
-                    $factory = Get-Command $factoryCommand -ErrorAction SilentlyContinue
-                    if (-not $factory) {
-                        Write-Warning "Component factory not found: $factoryCommand. Skipping component '$($compDef.Name)'."
-                        continue
+            # Wrap a user-provided event handler to inject parent context
+            function Wrap-EventHandler {
+                param(
+                    [scriptblock]$Handler,
+                    [hashtable]$ParentScreen,
+                    [hashtable]$Component
+                )
+                
+                if (-not $Handler) { return $null }
+                
+                # Create wrapper that passes both parent screen and component
+                $wrapper = {
+                    param($EventArgs)
+                    
+                    # Create event context with all relevant references
+                    $context = @{
+                        Screen = $wrappedParentScreen
+                        Component = $wrappedComponent
+                        EventArgs = $EventArgs
                     }
                     
-                    $component = & $factory -Props $compDef.Props
-                    $component.Name = $compDef.Name
-                    $component.ParentScreen = $self # Link component back to the screen
-                    
-                    $self._children[$component.Name] = $component
-                    if ($component.IsFocusable) {
-                        $self._focusableNames += $component.Name
+                    # Call original handler with context
+                    & $wrappedHandler -Context $context
+                }
+                
+                # Bind variables to the wrapper closure
+                $wrapper = $wrapper.GetNewClosure()
+                Set-Variable -Name 'wrappedHandler' -Value $Handler -Scope 1
+                Set-Variable -Name 'wrappedParentScreen' -Value $ParentScreen -Scope 1
+                Set-Variable -Name 'wrappedComponent' -Value $Component -Scope 1
+                
+                return $wrapper
+            }
+            
+            # Instantiate all child components using the factory
+            if ($Definition.Children) {
+                foreach ($compDef in $Definition.Children) {
+                    try {
+                        # Use the factory method instead of string concatenation
+                        $component = Create-TuiComponent -Type $compDef.Type -Props $compDef.Props
+                        $component.Name = $compDef.Name
+                        $component.ParentScreen = $self
+                        
+                        # Wrap all event handlers with parent context
+                        $eventHandlers = @('OnChange', 'OnClick', 'OnFocus', 'OnBlur', 'OnSubmit')
+                        foreach ($handlerName in $eventHandlers) {
+                            if ($component.$handlerName) {
+                                $component.$handlerName = Wrap-EventHandler `
+                                    -Handler $component.$handlerName `
+                                    -ParentScreen $self `
+                                    -Component $component
+                            }
+                        }
+                        
+                        $self._children[$component.Name] = $component
+                        if ($component.IsFocusable) {
+                            $self._focusableNames += $component.Name
+                        }
+                    }
+                    catch {
+                        Write-Warning "Failed to create component '$($compDef.Name)' of type '$($compDef.Type)': $_"
                     }
                 }
             }
@@ -140,26 +208,26 @@ function global:Create-TuiScreen {
                 & $Definition.Render -self $self
             }
 
-            # Render each child component
-            if ($self._children) {
-                foreach ($childName in $self._children.Keys) {
-                    $child = $self._children[$childName]
-                    if(-not $child.Visible) { continue }
-                    
-                    $renderableChild = $child.Clone()
-                    
-                    # Data Binding (State -> Props)
-                    if ($child.Props.RowsProp) { $renderableChild.Data = $self.State.($child.Props.RowsProp) }
-                    if ($child.Props.SelectedRowProp) { $renderableChild.SelectedRow = $self.State.($child.Props.SelectedRowProp) }
-                    # Add more bindings here as needed
+            # Apply layout if specified
+            if ($self.Layout -ne "Manual" -and $self._children.Count -gt 0) {
+                $components = $self._children.Values | Where-Object { $_.Visible }
+                Apply-Layout -LayoutType $self.Layout -Components $components -Options $self.LayoutOptions
+            }
 
-                    # Set focus state
-                    if ($self._focusedIndex -ne -1 -and $child.Name -eq $self._focusableNames[$self._focusedIndex]) {
-                        $renderableChild.IsFocused = $true
-                    }
-                    
-                    & $renderableChild.Render -self $renderableChild
-                }
+            # Render each child component WITHOUT CLONING
+            foreach ($childName in $self._children.Keys) {
+                $child = $self._children[$childName]
+                if(-not $child.Visible) { continue }
+                
+                # Apply data bindings before render
+                Apply-DataBindings -Component $child -ScreenState $self.State -Bindings $self.Bindings
+                
+                # Pass focus state as parameter instead of modifying component
+                $isFocused = ($self._focusedIndex -ne -1 -and $childName -eq $self._focusableNames[$self._focusedIndex])
+                $isDisabled = if ($child.Disabled) { $child.Disabled } else { $false }
+                
+                # Call render with state parameters - no more backwards compatibility
+                & $child.Render -self $child -IsFocused $isFocused -IsDisabled $isDisabled
             }
         }
 
@@ -182,6 +250,10 @@ function global:Create-TuiScreen {
                 $focusedChild = $self._children[$focusedChildName]
                 
                 if (& $focusedChild.HandleInput -self $focusedChild -Key $Key) {
+                    # If child handled input and has value binding, update state
+                    if ($self.Bindings.ContainsKey($focusedChildName)) {
+                        Update-StateFromBinding -Component $focusedChild -ScreenState $self.State -Binding $self.Bindings[$focusedChildName]
+                    }
                     return $true
                 }
             }
@@ -196,7 +268,6 @@ function global:Create-TuiScreen {
         
         OnExit = {
             param($self)
-            # This logic was missing but is important for cleanup
             if ($Definition.OnExit) {
                 & $Definition.OnExit -self $self
             }
@@ -206,10 +277,86 @@ function global:Create-TuiScreen {
     return $screen
 }
 
+function Apply-DataBindings {
+    <#
+    .SYNOPSIS
+    Generic data binding system
+    #>
+    param($Component, $ScreenState, $Bindings)
+    
+    if (-not $Bindings -or -not $Component.Name) { return }
+    
+    # Check if this component has bindings
+    $binding = $Bindings[$Component.Name]
+    if (-not $binding) { return }
+    
+    # Apply each property binding
+    foreach ($prop in $binding.Keys) {
+        $statePath = $binding[$prop]
+        $value = Get-NestedProperty -Object $ScreenState -Path $statePath
+        
+        if ($null -ne $value) {
+            $Component[$prop] = $value
+        }
+    }
+}
+
+function Update-StateFromBinding {
+    <#
+    .SYNOPSIS
+    Updates state from component value
+    #>
+    param($Component, $ScreenState, $Binding)
+    
+    if (-not $Binding) { return }
+    
+    # Find value properties (common ones)
+    $valueProps = @('Value', 'Text', 'SelectedIndex', 'SelectedItem', 'Checked')
+    
+    foreach ($prop in $valueProps) {
+        if ($Component.ContainsKey($prop) -and $Binding.ContainsKey($prop)) {
+            $statePath = $Binding[$prop]
+            Set-NestedProperty -Object $ScreenState -Path $statePath -Value $Component[$prop]
+        }
+    }
+}
+
+function Get-NestedProperty {
+    param($Object, $Path)
+    
+    $parts = $Path -split '\.'
+    $current = $Object
+    
+    foreach ($part in $parts) {
+        if ($null -eq $current) { return $null }
+        $current = $current[$part]
+    }
+    
+    return $current
+}
+
+function Set-NestedProperty {
+    param($Object, $Path, $Value)
+    
+    $parts = $Path -split '\.'
+    $current = $Object
+    
+    for ($i = 0; $i -lt $parts.Count - 1; $i++) {
+        $part = $parts[$i]
+        if (-not $current.ContainsKey($part)) {
+            $current[$part] = @{}
+        }
+        $current = $current[$part]
+    }
+    
+    $current[$parts[-1]] = $Value
+}
+
 function global:Create-TuiForm {
     <#
     .SYNOPSIS
     Creates a form screen with automatic field management
+    FIXED: Uses Stack layout instead of hardcoded coordinates
     
     .PARAMETER Title
     Form title
@@ -223,100 +370,123 @@ function global:Create-TuiForm {
     param(
         [string]$Title = "Form",
         [array]$Fields = @(),
-        [scriptblock]$OnSubmit = {}
+        [scriptblock]$OnSubmit = {},
+        [hashtable]$Options = @{}
     )
     
     $formState = @{}
-    $formComponents = @()
-    
-    # Create form container
-    $formComponents += @{
-        Type = "Form"
-        Props = @{
-            X = 10
-            Y = 3
-            Width = 60
-            Height = 20
-            Title = " $Title "
-        }
-    }
+    $formChildren = @()
+    $bindings = @{}
     
     # Create fields
-    $currentY = 2
+    $fieldIndex = 0
     foreach ($field in $Fields) {
         # Label
-        $formComponents += @{
+        $labelName = "Label_$fieldIndex"
+        $formChildren += @{
+            Name = $labelName
             Type = "Label"
             Props = @{
-                X = 2
-                Y = $currentY
                 Text = "$($field.Label):"
+                Width = if ($Options.LabelWidth) { $Options.LabelWidth } else { 15 }
+                Height = 1
             }
         }
         
         # Field component
+        $fieldName = $field.Name
+        $fieldType = if ($field.Type) { $field.Type } else { "TextBox" }
+        
         $fieldComponent = @{
-            Type = if ($field.Type) { $field.Type } else { "TextBox" }
+            Name = $fieldName
+            Type = $fieldType
             Props = @{
-                X = 20
-                Y = $currentY
-                Width = 35
-                Name = $field.Name
+                Width = if ($Options.FieldWidth) { $Options.FieldWidth } else { 35 }
+                Height = if ($fieldType -eq "TextArea") { 3 } else { 1 }
             }
         }
         
         # Add field-specific properties
         foreach ($key in $field.Keys) {
-            if ($key -notin @('Label', 'Name', 'Type')) {
+            if ($key -notin @('Label', 'Name', 'Type', 'DefaultValue')) {
                 $fieldComponent.Props[$key] = $field[$key]
             }
         }
         
-        $formComponents += $fieldComponent
+        $formChildren += $fieldComponent
         
-        # Initialize state
+        # Initialize state and bindings
         $formState[$field.Name] = if ($field.DefaultValue) { $field.DefaultValue } else { "" }
+        $bindings[$fieldName] = @{ Value = $field.Name }
         
-        $currentY += 3
+        $fieldIndex++
     }
     
-    # Submit button
-    $formComponents += @{
-        Type = "Button"
+    # Button container
+    $buttonContainerName = "ButtonContainer"
+    $formChildren += @{
+        Name = $buttonContainerName
+        Type = "Container"
         Props = @{
-            X = 20
-            Y = $currentY + 1
-            Width = 15
-            Text = "Submit"
-            OnClick = {
-                $formData = @{}
-                foreach ($field in $Fields) {
-                    $formData[$field.Name] = $formState[$field.Name]
+            Height = 1
+            Layout = "Stack"
+            LayoutOptions = @{ Orientation = "Horizontal"; Spacing = 2 }
+            Children = @(
+                @{
+                    Name = "SubmitButton"
+                    Type = "Button"
+                    Props = @{
+                        Width = 12
+                        Height = 1
+                        Text = "Submit"
+                        OnClick = {
+                            $formData = @{}
+                            foreach ($field in $Fields) {
+                                $formData[$field.Name] = $formState[$field.Name]
+                            }
+                            & $OnSubmit -FormData $formData
+                        }.GetNewClosure()
+                    }
                 }
-                & $OnSubmit -FormData $formData
-            }
+                @{
+                    Name = "CancelButton"
+                    Type = "Button"
+                    Props = @{
+                        Width = 12
+                        Height = 1
+                        Text = "Cancel"
+                        OnClick = { Pop-Screen }
+                    }
+                }
+            )
         }
     }
     
-    # Cancel button
-    $formComponents += @{
-        Type = "Button"
-        Props = @{
-            X = 37
-            Y = $currentY + 1
-            Width = 15
-            Text = "Cancel"
-            OnClick = {
-                Pop-Screen
-            }
-        }
-    }
+    # Calculate form dimensions
+    $formWidth = if ($Options.Width) { $Options.Width } else { 60 }
+    $formHeight = if ($Options.Height) { $Options.Height } else { ($Fields.Count * 3) + 8 }
     
     return Create-TuiScreen -Definition @{
         Name = "$Title`Form"
         State = $formState
-        Components = $formComponents
-        Layout = "Manual"
+        Children = $formChildren
+        Bindings = $bindings
+        Layout = "Stack"
+        LayoutOptions = @{
+            X = [Math]::Floor(($global:TuiState.BufferWidth - $formWidth) / 2)
+            Y = [Math]::Floor(($global:TuiState.BufferHeight - $formHeight) / 2)
+            Spacing = 1
+            Padding = 2
+        }
+        
+        Render = {
+            param($self)
+            # Draw form border
+            $x = $self.LayoutOptions.X
+            $y = $self.LayoutOptions.Y
+            Write-BufferBox -X $x -Y $y -Width $formWidth -Height $formHeight `
+                -Title " $Title " -BorderColor (Get-ThemeColor "Accent")
+        }
     }
 }
 
@@ -324,18 +494,6 @@ function global:Show-TuiMessageBox {
     <#
     .SYNOPSIS
     Shows a message box dialog
-    
-    .PARAMETER Title
-    Dialog title
-    
-    .PARAMETER Message
-    Message to display
-    
-    .PARAMETER Buttons
-    Array of button names
-    
-    .PARAMETER OnButtonClick
-    Handler for button clicks
     #>
     param(
         [string]$Title = "Message",
@@ -351,38 +509,23 @@ function global:Show-TuiMessageBox {
         OnButtonClick = $OnButtonClick
     }
     
-    # Create a screen wrapper for the dialog
-    $dialogScreen = @{
-        Name = "DialogScreen"
-        State = @{ Dialog = $dialog }
-        
-        Render = {
-            param($self)
-            & $self.State.Dialog.Render -self $self.State.Dialog
+    # Use the dialog system's Show-TuiDialog if available
+    if (Get-Command -Name "Show-TuiDialog" -ErrorAction SilentlyContinue) {
+        Show-TuiDialog -DialogComponent $dialog
+    } else {
+        # Fallback: create a screen wrapper
+        $dialogScreen = Create-TuiScreen -Definition @{
+            Name = "DialogScreen"
+            Children = @(@{ Name = "Dialog"; Type = "Dialog"; Props = $dialog.Props })
         }
-        
-        HandleInput = {
-            param($self, $Key)
-            return & $self.State.Dialog.HandleInput -self $self.State.Dialog -Key $Key
-        }
+        Push-Screen -Screen $dialogScreen
     }
-    
-    Push-Screen -Screen $dialogScreen
 }
 
 function global:Show-TuiNotification {
     <#
     .SYNOPSIS
     Shows a toast notification
-    
-    .PARAMETER Message
-    Notification message
-    
-    .PARAMETER Type
-    Notification type (Info, Success, Warning, Error)
-    
-    .PARAMETER Duration
-    Display duration in milliseconds
     #>
     param(
         [string]$Message,
@@ -397,15 +540,7 @@ function global:Show-TuiNotification {
             Duration = $Duration
         }
     } else {
-        # Fallback to direct rendering
-        $toast = Create-TuiComponent -Type "Toast" -Props @{
-            Message = $Message
-            ToastType = $Type
-            Duration = $Duration
-        }
-        
-        # This would need integration with the dialog system
-        # For now, just write to status line
+        # Fallback to status line
         Write-StatusLine -Text $Message -ForegroundColor (Get-ThemeColor $Type)
     }
 }
@@ -414,15 +549,6 @@ function global:Create-TuiWizard {
     <#
     .SYNOPSIS
     Creates a multi-step wizard interface
-    
-    .PARAMETER Title
-    Wizard title
-    
-    .PARAMETER Steps
-    Array of step definitions
-    
-    .PARAMETER OnComplete
-    Handler for wizard completion
     #>
     param(
         [string]$Title,
@@ -433,6 +559,12 @@ function global:Create-TuiWizard {
     $wizardState = @{
         CurrentStep = 0
         Data = @{}
+        StepStates = @{}  # Store state for each step
+    }
+    
+    # Initialize step states
+    for ($i = 0; $i -lt $Steps.Count; $i++) {
+        $wizardState.StepStates[$i] = @{}
     }
     
     $wizard = Create-TuiScreen -Definition @{
@@ -449,20 +581,18 @@ function global:Create-TuiWizard {
             
             # Progress bar
             $progress = ($self.State.CurrentStep + 1) / $Steps.Count
-            $progressBar = Create-TuiComponent -Type "ProgressBar" -Props @{
-                X = 10
-                Y = $progressY + 1
-                Width = 60
-                Value = $progress * 100
-                Max = 100
-                ShowPercent = $false
-            }
-            & $progressBar.Render -self $progressBar
+            $progressBarWidth = 60
+            $filledWidth = [Math]::Floor($progressBarWidth * $progress)
+            $emptyWidth = $progressBarWidth - $filledWidth
+            
+            Write-BufferString -X 10 -Y ($progressY + 1) `
+                -Text ("█" * $filledWidth + "░" * $emptyWidth) `
+                -ForegroundColor (Get-ThemeColor "Success")
             
             # Current step
             $currentStep = $Steps[$self.State.CurrentStep]
             if ($currentStep.Render) {
-                & $currentStep.Render -self $self -StepData $self.State.Data
+                & $currentStep.Render -self $self -StepData $self.State.StepStates[$self.State.CurrentStep]
             }
             
             # Navigation buttons
@@ -482,10 +612,11 @@ function global:Create-TuiWizard {
             param($self, $Key)
             
             $currentStep = $Steps[$self.State.CurrentStep]
+            $currentStepState = $self.State.StepStates[$self.State.CurrentStep]
             
             # Let step handle input first
             if ($currentStep.HandleInput) {
-                $result = & $currentStep.HandleInput -self $self -Key $Key -StepData $self.State.Data
+                $result = & $currentStep.HandleInput -self $self -Key $Key -StepData $currentStepState
                 if ($result) { return $result }
             }
             
@@ -493,6 +624,11 @@ function global:Create-TuiWizard {
             switch ($Key.Key) {
                 ([ConsoleKey]::LeftArrow) {
                     if ($self.State.CurrentStep -gt 0) {
+                        # Save current step data
+                        if ($currentStep.SaveData) {
+                            & $currentStep.SaveData -StepData $currentStepState -WizardData $self.State.Data
+                        }
+                        
                         $self.State.CurrentStep--
                         Request-TuiRefresh
                         return $true
@@ -502,11 +638,16 @@ function global:Create-TuiWizard {
                     if ($self.State.CurrentStep -lt ($Steps.Count - 1)) {
                         # Validate current step
                         if ($currentStep.Validate) {
-                            $isValid = & $currentStep.Validate -StepData $self.State.Data
+                            $isValid = & $currentStep.Validate -StepData $currentStepState
                             if (-not $isValid) {
                                 Show-TuiNotification -Message "Please complete all required fields" -Type "Warning"
                                 return $true
                             }
+                        }
+                        
+                        # Save current step data
+                        if ($currentStep.SaveData) {
+                            & $currentStep.SaveData -StepData $currentStepState -WizardData $self.State.Data
                         }
                         
                         $self.State.CurrentStep++
@@ -514,6 +655,10 @@ function global:Create-TuiWizard {
                         return $true
                     } else {
                         # Complete wizard
+                        if ($currentStep.SaveData) {
+                            & $currentStep.SaveData -StepData $currentStepState -WizardData $self.State.Data
+                        }
+                        
                         if ($OnComplete) {
                             & $OnComplete -WizardData $self.State.Data
                         }
@@ -530,13 +675,30 @@ function global:Create-TuiWizard {
     return $wizard
 }
 
+function global:Get-ScreenContext {
+    <#
+    .SYNOPSIS
+    Helper to get current screen context from event handler
+    #>
+    param($Context)
+    
+    if ($Context -is [hashtable] -and $Context.Screen) {
+        return $Context.Screen
+    }
+    
+    # Fallback for old-style handlers
+    return $null
+}
+
 # Export all functions
 Export-ModuleMember -Function @(
     'Initialize-TuiFramework',
+    'Register-TuiComponentType',
     'Create-TuiComponent',
     'Create-TuiScreen',
     'Create-TuiForm',
     'Show-TuiMessageBox',
     'Show-TuiNotification',
-    'Create-TuiWizard'
+    'Create-TuiWizard',
+    'Get-ScreenContext'
 )
