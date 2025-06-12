@@ -46,6 +46,49 @@ function global:New-TuiComponent {
     return $component
 }
 
+function global:New-TuiContainer {
+    param([hashtable]$Props = @{})
+    $container = New-TuiComponent -Props $Props
+    $container.Type = "Container"
+    $container.Layout = if ($Props.Layout) { $Props.Layout } else { "Manual" }
+    $container.LayoutOptions = if ($Props.LayoutOptions) { $Props.LayoutOptions } else { @{} }
+    $container.Children = if ($Props.Children) { $Props.Children } else { @() }
+    
+    $container.Render = {
+        param($self)
+        if (-not $self.Visible) { return }
+        
+        # Apply layout to children if specified
+        if ($self.Layout -ne "Manual" -and $self.Children.Count -gt 0) {
+            $layoutOptions = $self.LayoutOptions.Clone()
+            $layoutOptions.X = $self.X
+            $layoutOptions.Y = $self.Y
+            Apply-Layout -LayoutType $self.Layout -Components $self.Children -Options $layoutOptions
+        }
+        
+        # Render each child
+        foreach ($child in $self.Children) {
+            if ($child.Visible) {
+                & $child.Render -self $child
+            }
+        }
+    }
+    
+    $container.HandleInput = {
+        param($self, $Key)
+        # Delegate to focusable children
+        foreach ($child in $self.Children) {
+            if ($child.IsFocusable -and $child.Visible) {
+                $result = & $child.HandleInput -self $child -Key $Key
+                if ($result) { return $result }
+            }
+        }
+        return $false
+    }
+    
+    return $container
+}
+
 function global:New-TuiForm {
     param([hashtable]$Props = @{})
     $form = New-TuiComponent -Props $Props
@@ -782,6 +825,7 @@ function global:New-TuiDialog {
 Export-ModuleMember -Function @(
     # Base
     'New-TuiComponent',
+    'New-TuiContainer',
     'New-TuiForm',
     # Basic Components
     'New-TuiLabel',

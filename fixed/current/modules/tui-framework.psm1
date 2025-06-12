@@ -36,9 +36,127 @@ function global:Initialize-TuiFramework {
         Chart = { param($Props) New-TuiChart @Props }
         Toast = { param($Props) New-TuiToast @Props }
         Dialog = { param($Props) New-TuiDialog @Props }
+        Container = { param($Props) New-TuiContainer @Props }
     }
     
     Write-Verbose "TUI Framework initialized with $($script:ComponentRegistry.Count) component types"
+}
+
+function global:Apply-Layout {
+    <#
+    .SYNOPSIS
+    Applies a layout algorithm to position components
+    
+    .PARAMETER LayoutType
+    The type of layout to apply (Stack, Grid, Manual)
+    
+    .PARAMETER Components
+    Array of components to layout
+    
+    .PARAMETER Options
+    Layout-specific options
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LayoutType,
+        
+        [Parameter(Mandatory = $true)]
+        [array]$Components,
+        
+        [Parameter()]
+        [hashtable]$Options = @{}
+    )
+    
+    switch ($LayoutType) {
+        "Stack" {
+            Apply-StackLayout -Components $Components -Options $Options
+        }
+        "Grid" {
+            Apply-GridLayout -Components $Components -Options $Options
+        }
+        "Manual" {
+            # Components keep their existing X,Y positions
+        }
+        default {
+            Write-Warning "Unknown layout type: $LayoutType"
+        }
+    }
+}
+
+function Apply-StackLayout {
+    param(
+        [array]$Components,
+        [hashtable]$Options
+    )
+    
+    $orientation = if ($Options.Orientation) { $Options.Orientation } else { "Vertical" }
+    $spacing = if ($null -ne $Options.Spacing) { $Options.Spacing } else { 1 }
+    $padding = if ($null -ne $Options.Padding) { $Options.Padding } else { 0 }
+    $x = if ($null -ne $Options.X) { $Options.X } else { 0 }
+    $y = if ($null -ne $Options.Y) { $Options.Y } else { 0 }
+    
+    $currentX = $x + $padding
+    $currentY = $y + $padding
+    
+    foreach ($component in $Components) {
+        if (-not $component.Visible) { continue }
+        
+        $component.X = $currentX
+        $component.Y = $currentY
+        
+        if ($orientation -eq "Vertical") {
+            $currentY += $component.Height + $spacing
+        } else {
+            $currentX += $component.Width + $spacing
+        }
+    }
+}
+
+function Apply-GridLayout {
+    param(
+        [array]$Components,
+        [hashtable]$Options
+    )
+    
+    $rows = if ($Options.Rows) { $Options.Rows } else { 1 }
+    $columns = if ($Options.Columns) { $Options.Columns } else { 1 }
+    $spacing = if ($null -ne $Options.Spacing) { $Options.Spacing } else { 1 }
+    $padding = if ($null -ne $Options.Padding) { $Options.Padding } else { 0 }
+    $x = if ($null -ne $Options.X) { $Options.X } else { 0 }
+    $y = if ($null -ne $Options.Y) { $Options.Y } else { 0 }
+    $width = if ($Options.Width) { $Options.Width } else { $global:TuiState.BufferWidth }
+    $height = if ($Options.Height) { $Options.Height } else { $global:TuiState.BufferHeight }
+    
+    # Calculate cell dimensions
+    $cellWidth = [Math]::Floor(($width - (2 * $padding) - (($columns - 1) * $spacing)) / $columns)
+    $cellHeight = [Math]::Floor(($height - (2 * $padding) - (($rows - 1) * $spacing)) / $rows)
+    
+    $componentIndex = 0
+    for ($row = 0; $row -lt $rows; $row++) {
+        for ($col = 0; $col -lt $columns; $col++) {
+            if ($componentIndex -ge $Components.Count) { break }
+            
+            $component = $Components[$componentIndex]
+            if (-not $component.Visible) { 
+                $componentIndex++
+                continue 
+            }
+            
+            # Calculate position
+            $component.X = $x + $padding + ($col * ($cellWidth + $spacing))
+            $component.Y = $y + $padding + ($row * ($cellHeight + $spacing))
+            
+            # Handle cell spanning
+            $colSpan = if ($component.ColSpan) { $component.ColSpan } else { 1 }
+            $rowSpan = if ($component.RowSpan) { $component.RowSpan } else { 1 }
+            
+            # Adjust component size to fit in grid cell(s)
+            $component.Width = ($cellWidth * $colSpan) + (($colSpan - 1) * $spacing)
+            $component.Height = ($cellHeight * $rowSpan) + (($rowSpan - 1) * $spacing)
+            
+            $componentIndex++
+        }
+    }
 }
 
 function global:Register-TuiComponentType {
@@ -378,12 +496,16 @@ function global:Create-TuiForm {
     $formChildren = @()
     $bindings = @{}
     
-    # Create fields
+    # Create field rows
     $fieldIndex = 0
     foreach ($field in $Fields) {
+        # Create a container for each field row (label + input)
+        $rowContainerName = "FieldRow_$fieldIndex"
+        $rowChildren = @()
+        
         # Label
         $labelName = "Label_$fieldIndex"
-        $formChildren += @{
+        $rowChildren += @{
             Name = $labelName
             Type = "Label"
             Props = @{
@@ -397,23 +519,39 @@ function global:Create-TuiForm {
         $fieldName = $field.Name
         $fieldType = if ($field.Type) { $field.Type } else { "TextBox" }
         
-        $fieldComponent = @{
-            Name = $fieldName
-            Type = $fieldType
-            Props = @{
-                Width = if ($Options.FieldWidth) { $Options.FieldWidth } else { 35 }
-                Height = if ($fieldType -eq "TextArea") { 3 } else { 1 }
-            }
+        $fieldProps = @{
+            Width = if ($Options.FieldWidth) { $Options.FieldWidth } else { 35 }
+            Height = if ($fieldType -eq "TextArea") { 3 } else { 3 }  # Standard height for inputs
         }
         
         # Add field-specific properties
         foreach ($key in $field.Keys) {
             if ($key -notin @('Label', 'Name', 'Type', 'DefaultValue')) {
-                $fieldComponent.Props[$key] = $field[$key]
+                $fieldProps[$key] = $field[$key]
             }
         }
         
-        $formChildren += $fieldComponent
+        $rowChildren += @{
+            Name = $fieldName
+            Type = $fieldType
+            Props = $fieldProps
+        }
+        
+        # Add the field row container
+        $formChildren += @{
+            Name = $rowContainerName
+            Type = "Container"
+            Props = @{
+                Height = if ($fieldType -eq "TextArea") { 3 } else { 3 }
+                Width = 52  # LabelWidth + FieldWidth + spacing
+                Layout = "Stack"
+                LayoutOptions = @{ 
+                    Orientation = "Horizontal"
+                    Spacing = 2
+                }
+                Children = $rowChildren
+            }
+        }
         
         # Initialize state and bindings
         $formState[$field.Name] = if ($field.DefaultValue) { $field.DefaultValue } else { "" }
@@ -422,29 +560,38 @@ function global:Create-TuiForm {
         $fieldIndex++
     }
     
-    # Button container
+    # Button container with horizontal stack layout
     $buttonContainerName = "ButtonContainer"
     $formChildren += @{
         Name = $buttonContainerName
         Type = "Container"
         Props = @{
-            Height = 1
+            Height = 3
+            Width = 52
             Layout = "Stack"
-            LayoutOptions = @{ Orientation = "Horizontal"; Spacing = 2 }
+            LayoutOptions = @{ 
+                Orientation = "Horizontal"
+                Spacing = 2
+                Padding = 1
+            }
             Children = @(
                 @{
                     Name = "SubmitButton"
                     Type = "Button"
                     Props = @{
                         Width = 12
-                        Height = 1
+                        Height = 3
                         Text = "Submit"
                         OnClick = {
-                            $formData = @{}
-                            foreach ($field in $Fields) {
-                                $formData[$field.Name] = $formState[$field.Name]
+                            param($Context)
+                            $screen = Get-ScreenContext -Context $Context
+                            if ($screen) {
+                                $formData = @{}
+                                foreach ($field in $Fields) {
+                                    $formData[$field.Name] = $screen.State[$field.Name]
+                                }
+                                & $OnSubmit -FormData $formData
                             }
-                            & $OnSubmit -FormData $formData
                         }.GetNewClosure()
                     }
                 }
@@ -453,7 +600,7 @@ function global:Create-TuiForm {
                     Type = "Button"
                     Props = @{
                         Width = 12
-                        Height = 1
+                        Height = 3
                         Text = "Cancel"
                         OnClick = { Pop-Screen }
                     }
@@ -464,8 +611,10 @@ function global:Create-TuiForm {
     
     # Calculate form dimensions
     $formWidth = if ($Options.Width) { $Options.Width } else { 60 }
-    $formHeight = if ($Options.Height) { $Options.Height } else { ($Fields.Count * 3) + 8 }
+    $totalFieldHeight = $Fields.Count * 4  # 3 for field + 1 for spacing
+    $formHeight = if ($Options.Height) { $Options.Height } else { $totalFieldHeight + 10 }  # +10 for padding, buttons, border
     
+    # Create the form screen with vertical stack layout
     return Create-TuiScreen -Definition @{
         Name = "$Title`Form"
         State = $formState
@@ -475,8 +624,9 @@ function global:Create-TuiForm {
         LayoutOptions = @{
             X = [Math]::Floor(($global:TuiState.BufferWidth - $formWidth) / 2)
             Y = [Math]::Floor(($global:TuiState.BufferHeight - $formHeight) / 2)
+            Orientation = "Vertical"
             Spacing = 1
-            Padding = 2
+            Padding = 3
         }
         
         Render = {
@@ -700,5 +850,6 @@ Export-ModuleMember -Function @(
     'Show-TuiMessageBox',
     'Show-TuiNotification',
     'Create-TuiWizard',
-    'Get-ScreenContext'
+    'Get-ScreenContext',
+    'Apply-Layout'
 )
