@@ -16,9 +16,37 @@ function Get-ProjectManagementScreen {
         
         RefreshProjects = {
             param($self)
-            $projects = @($script:Data.Projects.GetEnumerator())
             
-            if (-not $self.State.ShowInactive) {
+            # Ensure Data structure exists
+            if (-not $script:Data) {
+                $script:Data = @{
+                    Projects = @{}
+                    Tasks = @()
+                    TimeEntries = @()
+                }
+            }
+            
+            # Ensure Projects exists
+            if (-not $script:Data.Projects) {
+                $script:Data.Projects = @{}
+            }
+            
+            # Get projects as array
+            $projects = @()
+            if ($script:Data.Projects -is [hashtable]) {
+                $projects = @($script:Data.Projects.GetEnumerator())
+            } elseif ($script:Data.Projects -is [array]) {
+                # Convert array to hashtable entries for compatibility
+                $tempHash = @{}
+                foreach ($proj in $script:Data.Projects) {
+                    if ($proj.Key) {
+                        $tempHash[$proj.Key] = $proj
+                    }
+                }
+                $projects = @($tempHash.GetEnumerator())
+            }
+            
+            if (-not $self.State.ShowInactive -and $projects.Count -gt 0) {
                 $projects = $projects | Where-Object { $_.Value.IsActive -ne $false }
             }
             
@@ -56,6 +84,11 @@ function Get-ProjectManagementScreen {
                 $msgX = [Math]::Floor(($script:TuiState.BufferWidth - $emptyMsg.Length) / 2)
                 $msgY = [Math]::Floor($script:TuiState.BufferHeight / 2)
                 Write-BufferString -X $msgX -Y $msgY -Text $emptyMsg -ForegroundColor (Get-ThemeColor "Subtle")
+                
+                # Add instruction to create new project
+                $helpMsg = "Press [N] to create a new project"
+                $helpX = [Math]::Floor(($script:TuiState.BufferWidth - $helpMsg.Length) / 2)
+                Write-BufferString -X $helpX -Y ($msgY + 2) -Text $helpMsg -ForegroundColor (Get-ThemeColor "Accent")
             } else {
                 for ($i = $startIdx; $i -lt $endIdx; $i++) {
                     $project = $self.State.Projects[$i]
@@ -81,10 +114,18 @@ function Get-ProjectManagementScreen {
                     Write-BufferString -X 4 -Y ($rowY + 2) -Text "● $statusText" -ForegroundColor $statusColor
                     
                     # Stats
-                    $taskCount = @($script:Data.Tasks | Where-Object { $_.ProjectKey -eq $project.Key }).Count
-                    $hoursLogged = ($script:Data.TimeEntries | Where-Object { $_.ProjectKey -eq $project.Key } | 
-                        Measure-Object -Property Hours -Sum).Sum
-                    if (-not $hoursLogged) { $hoursLogged = 0 }
+                    $taskCount = 0
+                    $hoursLogged = 0
+                    
+                    if ($script:Data.Tasks) {
+                        $taskCount = @($script:Data.Tasks | Where-Object { $_.ProjectKey -eq $project.Key }).Count
+                    }
+                    
+                    if ($script:Data.TimeEntries) {
+                        $hoursLogged = ($script:Data.TimeEntries | Where-Object { $_.ProjectKey -eq $project.Key } | 
+                            Measure-Object -Property Hours -Sum).Sum
+                        if (-not $hoursLogged) { $hoursLogged = 0 }
+                    }
                     
                     $statsText = "$taskCount tasks | $($hoursLogged.ToString('0.0')) hours logged"
                     Write-BufferString -X ($boxWidth - $statsText.Length - 2) -Y ($rowY + 2) -Text $statsText `
@@ -124,9 +165,11 @@ function Get-ProjectManagementScreen {
                     if ($self.State.Projects.Count -gt 0) {
                         $project = $self.State.Projects[$self.State.SelectedIndex]
                         # TODO: Push edit project screen
-                        Publish-Event -EventName "Notification.Show" -Data @{
-                            Text = "Edit project not implemented yet"
-                            Type = "Info"
+                        if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
+                            Publish-Event -EventName "Notification.Show" -Data @{
+                                Text = "Edit project not implemented yet"
+                                Type = "Info"
+                            }
                         }
                     }
                     return $true
@@ -135,15 +178,20 @@ function Get-ProjectManagementScreen {
                     if ($self.State.Projects.Count -gt 0) {
                         $project = $self.State.Projects[$self.State.SelectedIndex]
                         $project.Value.IsActive = -not $project.Value.IsActive
-                        Save-UnifiedData
+                        
+                        if (Get-Command -Name "Save-UnifiedData" -ErrorAction SilentlyContinue) {
+                            Save-UnifiedData
+                        }
                         
                         & $self.RefreshProjects -self $self
                         Request-TuiRefresh
                         
                         $status = if ($project.Value.IsActive) { "activated" } else { "deactivated" }
-                        Publish-Event -EventName "Notification.Show" -Data @{
-                            Text = "Project $status"
-                            Type = "Success"
+                        if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
+                            Publish-Event -EventName "Notification.Show" -Data @{
+                                Text = "Project $status"
+                                Type = "Success"
+                            }
                         }
                     }
                     return $true
@@ -187,6 +235,12 @@ function Get-AddProjectScreen {
         
         Init = {
             param($self)
+            
+            # Ensure TUI components are available
+            if (-not (Get-Command -Name "New-TuiLabel" -ErrorAction SilentlyContinue)) {
+                Write-Warning "TUI components not available for Add Project screen"
+                return
+            }
             
             $children = @(
                 New-TuiLabel -Props @{
@@ -234,16 +288,38 @@ function Get-AddProjectScreen {
                     Text = "Create"
                     OnClick = {
                         if ([string]::IsNullOrWhiteSpace($self.State.Name)) {
-                            Publish-Event -EventName "Notification.Show" -Data @{
-                                Text = "Project name is required"
-                                Type = "Error"
+                            if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
+                                Publish-Event -EventName "Notification.Show" -Data @{
+                                    Text = "Project name is required"
+                                    Type = "Error"
+                                }
                             }
                             return
                         }
                         
-                        Publish-Event -EventName "Data.Create.Project" -Data @{
-                            Name = $self.State.Name
-                            Description = $self.State.Description
+                        # Create project manually if event system not available
+                        if (Get-Command -Name "Publish-Event" -ErrorAction SilentlyContinue) {
+                            Publish-Event -EventName "Data.Create.Project" -Data @{
+                                Name = $self.State.Name
+                                Description = $self.State.Description
+                            }
+                        } else {
+                            # Direct creation fallback
+                            if (-not $script:Data) {
+                                $script:Data = @{ Projects = @{} }
+                            }
+                            if (-not $script:Data.Projects) {
+                                $script:Data.Projects = @{}
+                            }
+                            
+                            $projectKey = "PROJ" + ($script:Data.Projects.Count + 1)
+                            $script:Data.Projects[$projectKey] = @{
+                                Key = $projectKey
+                                Name = $self.State.Name
+                                Description = $self.State.Description
+                                IsActive = $true
+                                CreatedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                            }
                         }
                         
                         Pop-Screen
@@ -278,8 +354,15 @@ function Get-AddProjectScreen {
         
         Render = {
             param($self)
-            $self.FormContainer.State = $self.State
-            & $self.FormContainer.Render -self $self.FormContainer
+            if ($self.FormContainer) {
+                $self.FormContainer.State = $self.State
+                & $self.FormContainer.Render -self $self.FormContainer
+            } else {
+                # Fallback render if form container not initialized
+                Write-BufferBox -X 10 -Y 5 -Width 60 -Height 10 -Title " Add Project Error " -BorderColor "Red"
+                Write-BufferString -X 15 -Y 8 -Text "Unable to initialize form components" -ForegroundColor "Red"
+                Write-BufferString -X 15 -Y 10 -Text "Press [Esc] to go back" -ForegroundColor "Yellow"
+            }
         }
         
         HandleInput = {
@@ -288,8 +371,12 @@ function Get-AddProjectScreen {
                 return "Back"
             }
             
-            $self.FormContainer.State = $self.State
-            return & $self.FormContainer.HandleInput -self $self.FormContainer -Key $Key
+            if ($self.FormContainer) {
+                $self.FormContainer.State = $self.State
+                return & $self.FormContainer.HandleInput -self $self.FormContainer -Key $Key
+            }
+            
+            return $false
         }
     }
     

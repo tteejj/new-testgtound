@@ -34,6 +34,8 @@ $script:ScreenModules = @(
 )
 
 function Initialize-PMCModules {
+    param([bool]$Silent = $false)
+    
     # Console size validation
     $minWidth = 80
     $minHeight = 24
@@ -51,7 +53,9 @@ function Initialize-PMCModules {
         exit 1
     }
     
-    Write-Host "Initializing PMC Terminal v3.0..." -ForegroundColor Cyan
+    if (-not $Silent) {
+        Write-Host "Initializing PMC Terminal v3.0..." -ForegroundColor Cyan
+    }
     
     $loadedModules = @()
     
@@ -60,7 +64,9 @@ function Initialize-PMCModules {
         
         try {
             if (Test-Path $modulePath) {
-                Write-Host "  Loading $($module.Name)..." -ForegroundColor Gray
+                if (-not $Silent) {
+                    Write-Host "  Loading $($module.Name)..." -ForegroundColor Gray
+                }
                 Import-Module $modulePath -Force -Global -ErrorAction Stop
                 $loadedModules += $module.Name
             } elseif ($module.Required) {
@@ -70,17 +76,25 @@ function Initialize-PMCModules {
             if ($module.Required) {
                 throw "Failed to load required module $($module.Name): $_"
             } else {
-                Write-Host "  Optional module $($module.Name) not loaded: $_" -ForegroundColor Yellow
+                if (-not $Silent) {
+                    Write-Host "  Optional module $($module.Name) not loaded: $_" -ForegroundColor Yellow
+                }
             }
         }
     }
     
-    Write-Host "Loaded $($loadedModules.Count) modules successfully" -ForegroundColor Green
+    if (-not $Silent) {
+        Write-Host "Loaded $($loadedModules.Count) modules successfully" -ForegroundColor Green
+    }
     return $loadedModules
 }
 
 function Initialize-PMCScreens {
-    Write-Host "Loading screens..." -ForegroundColor Cyan
+    param([bool]$Silent = $false)
+    
+    if (-not $Silent) {
+        Write-Host "Loading screens..." -ForegroundColor Cyan
+    }
     
     $loadedScreens = @()
     
@@ -92,22 +106,32 @@ function Initialize-PMCScreens {
                 Import-Module $screenPath -Force -Global -ErrorAction SilentlyContinue
                 $loadedScreens += $screenName
             } else {
-                Write-Host "  Screen module not found: $screenName" -ForegroundColor Yellow
+                if (-not $Silent) {
+                    Write-Host "  Screen module not found: $screenName" -ForegroundColor Yellow
+                }
             }
         } catch {
-            Write-Host "  Failed to load screen: $screenName - $_" -ForegroundColor Yellow
+            if (-not $Silent) {
+                Write-Host "  Failed to load screen: $screenName - $_" -ForegroundColor Yellow
+            }
         }
     }
     
-    Write-Host "Loaded $($loadedScreens.Count) screens" -ForegroundColor Green
+    if (-not $Silent) {
+        Write-Host "Loaded $($loadedScreens.Count) screens" -ForegroundColor Green
+    }
     return $loadedScreens
 }
 
 function Start-PMCTerminal {
+    param([bool]$Silent = $false)
+    
     try {
-        $loadedModules = Initialize-PMCModules
+        $loadedModules = Initialize-PMCModules -Silent:$Silent
         
-        Write-Host "`nInitializing subsystems..." -ForegroundColor Cyan
+        if (-not $Silent) {
+            Write-Host "`nInitializing subsystems..." -ForegroundColor Cyan
+        }
         
         # Initialize core systems in correct order
         # Event system MUST be first as other systems depend on it
@@ -130,22 +154,26 @@ function Start-PMCTerminal {
         # Initialize optional framework
         if (Get-Command -Name "Initialize-TuiFramework" -ErrorAction SilentlyContinue) {
             Initialize-TuiFramework
-            Write-Host "  TUI Framework initialized" -ForegroundColor Gray
+            if (-not $Silent) {
+                Write-Host "  TUI Framework initialized" -ForegroundColor Gray
+            }
         }
         
         # Load screens
-        Initialize-PMCScreens
+        Initialize-PMCScreens -Silent:$Silent
         
-        Write-Host "`nStarting application..." -ForegroundColor Green
+        if (-not $Silent) {
+            Write-Host "`nStarting application..." -ForegroundColor Green
+        }
+        
+        # Clear the console completely before starting TUI
+        Clear-Host
         
         # Check if demo mode is requested
         if ($args -contains "-demo") {
-            Write-Host "Starting in demo mode..." -ForegroundColor Cyan
             if (Get-Command -Name "Get-DemoScreen" -ErrorAction SilentlyContinue) {
                 $demoScreen = Get-DemoScreen
                 Push-Screen -Screen $demoScreen
-            } else {
-                Write-Host "Demo screen not available" -ForegroundColor Yellow
             }
         } else {
             # Normal startup
@@ -153,7 +181,7 @@ function Start-PMCTerminal {
                 $dashboardScreen = Get-DashboardScreen
                 Push-Screen -Screen $dashboardScreen
             } else {
-                Write-Host "Dashboard screen not found, using fallback..." -ForegroundColor Yellow
+                # Fallback welcome screen
                 $welcomeScreen = @{
                     Name = "WelcomeScreen"
                     State = @{}
@@ -192,25 +220,32 @@ function Start-PMCTerminal {
     } finally {
         # Cleanup
         if (Get-Command -Name "Stop-TuiEngine" -ErrorAction SilentlyContinue) {
-            Write-Host "`nShutting down..." -ForegroundColor Yellow
+            if (-not $Silent) {
+                Write-Host "`nShutting down..." -ForegroundColor Yellow
+            }
             Stop-TuiEngine
         }
         
         if ($Data -and (Get-Command -Name "Save-UnifiedData" -ErrorAction SilentlyContinue)) {
-            Write-Host "Saving data..." -ForegroundColor Yellow
+            if (-not $Silent) {
+                Write-Host "Saving data..." -ForegroundColor Yellow
+            }
             Save-UnifiedData
         }
         
-        Write-Host "Goodbye!" -ForegroundColor Green
+        if (-not $Silent) {
+            Write-Host "Goodbye!" -ForegroundColor Green
+        }
     }
 }
 
 # Parse command line arguments
 $script:args = $args
+$script:Silent = $args -contains "-silent" -or $args -contains "-s"
 
 try {
     Clear-Host
-    Start-PMCTerminal
+    Start-PMCTerminal -Silent:$script:Silent
 } catch {
     Write-Error "Fatal error: $_"
     Write-Host "`nPress any key to exit..." -ForegroundColor Red

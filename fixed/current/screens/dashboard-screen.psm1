@@ -20,8 +20,10 @@ function global:Get-DashboardScreen {
         Render = {
             param($self)
             
-            # Simple header
-            Write-BufferString -X 2 -Y 1 -Text "PMC Terminal Dashboard - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor "Cyan"
+            # Simple header - centered
+            $headerText = "PMC Terminal Dashboard - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+            $headerX = [Math]::Max(2, [Math]::Floor(($script:TuiState.BufferWidth - $headerText.Length) / 2))
+            Write-BufferString -X $headerX -Y 1 -Text $headerText -ForegroundColor "Cyan"
             
             # Simple menu
             Write-BufferBox -X 2 -Y 3 -Width 40 -Height 10 -Title " Quick Actions " -BorderColor "Yellow"

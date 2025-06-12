@@ -33,9 +33,7 @@ $script:TuiState = @{
     EventHandlers = @{}
 }
 
-#added for debug, may need to be higher
-Write-Host "DEBUG: [Console]::WindowWidth = $([Console]::WindowWidth)"
-Write-Host "DEBUG: [Console]::WindowHeight = $([Console]::WindowHeight)"
+# Debug messages removed to prevent screen bleed-through
 # Note: Width and Height params are only available inside Initialize-TuiEngine function
 
 
@@ -92,7 +90,6 @@ function global:Initialize-TuiEngine {
     # Patch: Always set defaults if not passed in
     if (-not $Width) { $Width = [Console]::WindowWidth }
     if (-not $Height) { $Height = [Console]::WindowHeight - 1 }
-    Write-Host "DEBUG: (post-fix) Width=$Width, Height=$Height"
 
    
 
@@ -118,7 +115,7 @@ function global:Initialize-TuiEngine {
         }
         
         [Console]::CursorVisible = $false
-        # [Console]::Clear() # Commented out to avoid screen flicker
+        [Console]::Clear() # Clear console to remove initialization messages
         
         # Initialize subsystems with error handling
         try { Initialize-LayoutEngines } catch { Write-Warning "Layout engines init failed: $_" }
@@ -376,6 +373,7 @@ function Render-Frame {
             [ConsoleColor]::Black
         }
         
+        # Always clear the back buffer completely
         Clear-BackBuffer -BackgroundColor $bgColor
         
         # Render current screen
@@ -400,6 +398,9 @@ function Render-Frame {
         
         # Perform optimized render
         Render-BufferOptimized
+        
+        # Force cursor to bottom-right to avoid interference
+        [Console]::SetCursorPosition($script:TuiState.BufferWidth - 1, $script:TuiState.BufferHeight - 1)
         
     } catch {
         Write-Warning "Frame render error: $_"
@@ -590,10 +591,14 @@ function global:Pop-Screen {
 function global:Clear-BackBuffer {
     param([ConsoleColor]$BackgroundColor = [ConsoleColor]::Black)
     
-    $cell = @{ Char = ' '; FG = [ConsoleColor]::White; BG = $BackgroundColor }
+    # Create a new cell for each position to ensure proper clearing
     for ($y = 0; $y -lt $script:TuiState.BufferHeight; $y++) {
         for ($x = 0; $x -lt $script:TuiState.BufferWidth; $x++) {
-            $script:TuiState.BackBuffer[$y, $x] = $cell
+            $script:TuiState.BackBuffer[$y, $x] = @{ 
+                Char = ' '
+                FG = [ConsoleColor]::White
+                BG = $BackgroundColor 
+            }
         }
     }
 }
@@ -665,6 +670,9 @@ function global:Render-BufferOptimized {
     $lastFG = -1
     $lastBG = -1
     
+    # Force full render on first frame or if requested
+    $forceFullRender = $script:TuiState.RenderStats.FrameCount -eq 0
+    
     try {
         # Build ANSI output with change detection
         for ($y = 0; $y -lt $script:TuiState.BufferHeight; $y++) {
@@ -675,8 +683,9 @@ function global:Render-BufferOptimized {
                 $backCell = $script:TuiState.BackBuffer[$y, $x]
                 $frontCell = $script:TuiState.FrontBuffer[$y, $x]
                 
-                # Skip if cell hasn't changed
-                if ($backCell.Char -eq $frontCell.Char -and 
+                # Skip if cell hasn't changed (unless forcing full render)
+                if (-not $forceFullRender -and
+                    $backCell.Char -eq $frontCell.Char -and 
                     $backCell.FG -eq $frontCell.FG -and 
                     $backCell.BG -eq $frontCell.BG) {
                     continue
