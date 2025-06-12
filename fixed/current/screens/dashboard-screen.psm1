@@ -31,8 +31,16 @@ function global:Get-DashboardScreen {
             $y = 5
             foreach ($i in 0..($actions.Count - 1)) {
                 $isSelected = $i -eq $self.State.SelectedQuickAction
-                $text = $(if ($isSelected) { "→ " } else { "  " }) + $actions[$i]
-                $color = $(if ($isSelected) { "Yellow" } else { "White" })
+                
+                # Fixed: Replace $(if...) with proper conditional logic
+                if ($isSelected) {
+                    $text = "→ " + $actions[$i]
+                    $color = "Yellow"
+                } else {
+                    $text = "  " + $actions[$i]
+                    $color = "White"
+                }
+                
                 Write-BufferString -X 4 -Y $y -Text $text -ForegroundColor $color
                 $y++
             }

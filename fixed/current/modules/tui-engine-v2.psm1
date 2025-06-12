@@ -998,7 +998,11 @@ function global:Get-BorderChars {
             Horizontal='─'; Vertical='│' 
         } 
     }
-    return if ($styles.ContainsKey($Style)) { $styles[$Style] } else { $styles.Single }
+    if ($styles.ContainsKey($Style)) { 
+        return $styles[$Style] 
+    } else { 
+        return $styles.Single 
+    }
 }
 
 function Get-AnsiColorCode { 
@@ -1010,7 +1014,11 @@ function Get-AnsiColorCode {
         Red=91; Magenta=95; Yellow=93; White=97 
     }
     $code = $map[$Color.ToString()]
-    if ($IsBackground) { $code + 10 } else { $code } 
+    if ($IsBackground) { 
+        return $code + 10 
+    } else { 
+        return $code 
+    } 
 }
 
 function Get-ThemeColorFallback {

@@ -217,16 +217,16 @@ function global:New-TuiDialog {
     
     $dialog = @{
         Type = "Dialog"
-        Title = $Props.Title ?? "Dialog"
-        Message = $Props.Message ?? ""
-        Buttons = $Props.Buttons ?? @("OK")
+        Title = if ($Props.Title) { $Props.Title } else { "Dialog" }
+        Message = if ($Props.Message) { $Props.Message } else { "" }
+        Buttons = if ($Props.Buttons) { $Props.Buttons } else { @("OK") }
         SelectedButton = 0
-        Width = $Props.Width ?? 50
-        Height = $Props.Height ?? 10
+        Width = if ($Props.Width) { $Props.Width } else { 50 }
+        Height = if ($Props.Height) { $Props.Height } else { 10 }
         X = 0
         Y = 0
-        OnButtonClick = $Props.OnButtonClick ?? {}
-        OnCancel = $Props.OnCancel ?? {}
+        OnButtonClick = if ($Props.OnButtonClick) { $Props.OnButtonClick } else { {} }
+        OnCancel = if ($Props.OnCancel) { $Props.OnCancel } else { {} }
         
         Render = {
             param($self)

@@ -88,22 +88,20 @@ function global:Create-TuiScreen {
         [hashtable]$Definition
     )
 
-    # --- START OF CORRECTION ---
-    # The original implementation was flawed. This is the new, working version.
+    # PowerShell 5 compatible null checks
     $screen = @{
-        Name              = $Definition.Name ?? "Screen_$(Get-Random)"
-        State             = $Definition.State ?? @{}
+        Name              = if ($Definition.Name) { $Definition.Name } else { "Screen_$(Get-Random)" }
+        State             = if ($Definition.State) { $Definition.State } else { @{} }
         _children         = @{} # Internal storage for instantiated components
         _focusableNames   = @() # Names of focusable children, in order
         _focusedIndex     = -1
-        Layout            = $Definition.Layout ?? "Manual" # Preserving layout properties
-        LayoutOptions     = $Definition.LayoutOptions ?? @{}
+        Layout            = if ($Definition.Layout) { $Definition.Layout } else { "Manual" }
+        LayoutOptions     = if ($Definition.LayoutOptions) { $Definition.LayoutOptions } else { @{} }
 
         Init = {
             param($self)
             
             # Instantiate all child components from the definition.
-            # The original code did this but didn't link them correctly.
             if ($Definition.Children) {
                 foreach ($compDef in $Definition.Children) {
                     $factoryCommand = "New-Tui$($compDef.Type)"
@@ -115,7 +113,7 @@ function global:Create-TuiScreen {
                     
                     $component = & $factory -Props $compDef.Props
                     $component.Name = $compDef.Name
-                    $component.ParentScreen = $self # CRITICAL: Link component back to the screen
+                    $component.ParentScreen = $self # Link component back to the screen
                     
                     $self._children[$component.Name] = $component
                     if ($component.IsFocusable) {
@@ -204,7 +202,6 @@ function global:Create-TuiScreen {
             }
         }
     }
-    # --- END OF CORRECTION ---
     
     return $screen
 }
@@ -259,7 +256,7 @@ function global:Create-TuiForm {
         
         # Field component
         $fieldComponent = @{
-            Type = $field.Type ?? "TextBox"
+            Type = if ($field.Type) { $field.Type } else { "TextBox" }
             Props = @{
                 X = 20
                 Y = $currentY
@@ -278,7 +275,7 @@ function global:Create-TuiForm {
         $formComponents += $fieldComponent
         
         # Initialize state
-        $formState[$field.Name] = $field.DefaultValue ?? ""
+        $formState[$field.Name] = if ($field.DefaultValue) { $field.DefaultValue } else { "" }
         
         $currentY += 3
     }

@@ -8,15 +8,15 @@ function global:New-TuiComponent {
     param([hashtable]$Props = @{})
 
     $component = @{
-        Name        = $Props.Name ?? "comp_$(Get-Random)"
+        Name        = if ($Props.Name) { $Props.Name } else { "comp_$(Get-Random)" }
         Type        = "Component"
         IsFocusable = $false
         Children    = @()
         Visible     = if ($Props.ContainsKey('Visible')) { $Props.Visible } else { $true }
-        X           = $Props.X ?? 0
-        Y           = $Props.Y ?? 0
-        Width       = $Props.Width ?? 10
-        Height      = $Props.Height ?? 1
+        X           = if ($null -ne $Props.X) { $Props.X } else { 0 }
+        Y           = if ($null -ne $Props.Y) { $Props.Y } else { 0 }
+        Width       = if ($Props.Width) { $Props.Width } else { 10 }
+        Height      = if ($Props.Height) { $Props.Height } else { 1 }
         
         # Default Methods
         Render      = { param($self) }
@@ -61,8 +61,8 @@ function global:New-TuiForm {
         foreach ($child in $self.Children) {
             if ($child.Visible) {
                 $childToRender = $child.Clone()
-                $childToRender.X += $self.X + ($self.Padding ?? 1)
-                $childToRender.Y += $self.Y + ($self.Padding ?? 1)
+                $childToRender.X += $self.X + (if ($null -ne $self.Padding) { $self.Padding } else { 1 })
+                $childToRender.Y += $self.Y + (if ($null -ne $self.Padding) { $self.Padding } else { 1 })
                 
                 $childToRender.IsFocused = ($self.State.FocusedChildName -eq $child.Name)
                 if ($child.TextProp) { $childToRender.Text = $self.State.($child.TextProp) }
@@ -119,7 +119,7 @@ function global:New-TuiLabel {
     $component.Render = { 
         param($self) 
         Write-BufferString -X $self.X -Y $self.Y -Text $self.Text `
-            -ForegroundColor ($self.ForegroundColor ?? (Get-ThemeColor "Primary"))
+            -ForegroundColor (if ($self.ForegroundColor) { $self.ForegroundColor } else { Get-ThemeColor "Primary" })
     }
     return $component
 }
@@ -162,17 +162,17 @@ function global:New-TuiTextBox {
     $component.Type = "TextBox"
     $component.IsFocusable = $true
     $component.Height = 3
-    $component.Text = $Props.Text ?? ""
-    $component.CursorPosition = $Props.CursorPosition ?? 0
+    $component.Text = if ($Props.Text) { $Props.Text } else { "" }
+    $component.CursorPosition = if ($null -ne $Props.CursorPosition) { $Props.CursorPosition } else { 0 }
 
     $component.Render = {
         param($self)
         $borderColor = if ($self.IsFocused) { Get-ThemeColor "Accent" } else { Get-ThemeColor "Secondary" }
         Write-BufferBox -X $self.X -Y $self.Y -Width $self.Width -Height 3 -BorderColor $borderColor
         
-        $displayText = $self.Text ?? ""
+        $displayText = if ($self.Text) { $self.Text } else { "" }
         if ([string]::IsNullOrEmpty($displayText) -and -not $self.IsFocused) { 
-            $displayText = $self.Placeholder ?? "" 
+            $displayText = if ($self.Placeholder) { $self.Placeholder } else { "" }
         }
         
         $maxDisplayLength = $self.Width - 4
@@ -191,8 +191,8 @@ function global:New-TuiTextBox {
     
     $component.HandleInput = {
         param($self, $Key)
-        $text = $self.Text ?? ""
-        $cursorPos = $self.CursorPosition ?? 0
+        $text = if ($self.Text) { $self.Text } else { "" }
+        $cursorPos = if ($null -ne $self.CursorPosition) { $self.CursorPosition } else { 0 }
         $oldText = $text
 
         switch ($Key.Key) {
@@ -223,7 +223,7 @@ function global:New-TuiCheckBox {
     $component = New-TuiComponent -Props $Props
     $component.Type = "CheckBox"
     $component.IsFocusable = $true
-    $component.Checked = $Props.Checked ?? $false
+    $component.Checked = if ($null -ne $Props.Checked) { $Props.Checked } else { $false }
     
     $component.Render = {
         param($self)
@@ -254,8 +254,8 @@ function global:New-TuiDropdown {
     $component.Height = 3
     $component.IsOpen = $false
     $component.SelectedIndex = 0
-    $component.Options = $Props.Options ?? @()
-    $component.ValueProp = $Props.ValueProp ?? "Value"
+    $component.Options = if ($Props.Options) { $Props.Options } else { @() }
+    $component.ValueProp = if ($Props.ValueProp) { $Props.ValueProp } else { "Value" }
     
     $component.Render = {
         param($self)
@@ -323,8 +323,8 @@ function global:New-TuiProgressBar {
     param([hashtable]$Props = @{})
     $component = New-TuiComponent -Props $Props
     $component.Type = "ProgressBar"
-    $component.Value = $Props.Value ?? 0
-    $component.Max = $Props.Max ?? 100
+    $component.Value = if ($null -ne $Props.Value) { $Props.Value } else { 0 }
+    $component.Max = if ($Props.Max) { $Props.Max } else { 100 }
     
     $component.Render = {
         param($self)
@@ -350,13 +350,13 @@ function global:New-TuiTextArea {
     $component = New-TuiComponent -Props $Props
     $component.Type = "TextArea"
     $component.IsFocusable = $true
-    $component.Height = $Props.Height ?? 6
-    $component.Text = $Props.Text ?? ""
+    $component.Height = if ($Props.Height) { $Props.Height } else { 6 }
+    $component.Text = if ($Props.Text) { $Props.Text } else { "" }
     $component.Lines = @($component.Text -split "`n")
     $component.CursorX = 0
     $component.CursorY = 0
     $component.ScrollOffset = 0
-    $component.WrapText = $Props.WrapText ?? $true
+    $component.WrapText = if ($null -ne $Props.WrapText) { $Props.WrapText } else { $true }
     
     $component.Render = {
         param($self)
@@ -378,7 +378,7 @@ function global:New-TuiTextArea {
         }
         
         if ($displayLines.Count -eq 1 -and $displayLines[0] -eq "" -and -not $self.IsFocused) {
-            Write-BufferString -X ($self.X + 2) -Y ($self.Y + 1) -Text ($self.Placeholder ?? "Enter text...")
+            Write-BufferString -X ($self.X + 2) -Y ($self.Y + 1) -Text (if ($self.Placeholder) { $self.Placeholder } else { "Enter text..." })
             return
         }
         
@@ -498,8 +498,8 @@ function global:New-TuiDatePicker {
     $component.Type = "DatePicker"
     $component.IsFocusable = $true
     $component.Height = 3
-    $component.Value = $Props.Value ?? (Get-Date)
-    $component.Format = $Props.Format ?? "yyyy-MM-dd"
+    $component.Value = if ($Props.Value) { $Props.Value } else { Get-Date }
+    $component.Format = if ($Props.Format) { $Props.Format } else { "yyyy-MM-dd" }
     
     $component.Render = {
         param($self)
@@ -535,9 +535,9 @@ function global:New-TuiTimePicker {
     $component.Type = "TimePicker"
     $component.IsFocusable = $true
     $component.Height = 3
-    $component.Hour = $Props.Hour ?? 0
-    $component.Minute = $Props.Minute ?? 0
-    $component.Format24H = $Props.Format24H ?? $true
+    $component.Hour = if ($null -ne $Props.Hour) { $Props.Hour } else { 0 }
+    $component.Minute = if ($null -ne $Props.Minute) { $Props.Minute } else { 0 }
+    $component.Format24H = if ($null -ne $Props.Format24H) { $Props.Format24H } else { $true }
     
     $component.Render = {
         param($self)
@@ -579,8 +579,8 @@ function global:New-TuiTable {
     $component = New-TuiComponent -Props $Props
     $component.Type = "Table"
     $component.IsFocusable = $true
-    $component.Columns = $Props.Columns ?? @()
-    $component.Rows = $Props.Rows ?? @()
+    $component.Columns = if ($Props.Columns) { $Props.Columns } else { @() }
+    $component.Rows = if ($Props.Rows) { $Props.Rows } else { @() }
     $component.SelectedRow = 0
     $component.ScrollOffset = 0
     $component.SortColumn = $null
@@ -657,9 +657,9 @@ function global:New-TuiChart {
     param([hashtable]$Props = @{})
     $component = New-TuiComponent -Props $Props
     $component.Type = "Chart"
-    $component.ChartType = $Props.ChartType ?? "Bar"
-    $component.Data = $Props.Data ?? @()
-    $component.ShowValues = $Props.ShowValues ?? $true
+    $component.ChartType = if ($Props.ChartType) { $Props.ChartType } else { "Bar" }
+    $component.Data = if ($Props.Data) { $Props.Data } else { @() }
+    $component.ShowValues = if ($null -ne $Props.ShowValues) { $Props.ShowValues } else { $true }
     
     $component.Render = {
         param($self)
@@ -696,10 +696,10 @@ function global:New-TuiToast {
     param([hashtable]$Props = @{})
     $component = New-TuiComponent -Props $Props
     $component.Type = "Toast"
-    $component.Message = $Props.Message ?? ""
-    $component.ToastType = $Props.ToastType ?? "Info"
-    $component.Duration = $Props.Duration ?? 3000
-    $component.Position = $Props.Position ?? "TopRight"
+    $component.Message = if ($Props.Message) { $Props.Message } else { "" }
+    $component.ToastType = if ($Props.ToastType) { $Props.ToastType } else { "Info" }
+    $component.Duration = if ($Props.Duration) { $Props.Duration } else { 3000 }
+    $component.Position = if ($Props.Position) { $Props.Position } else { "TopRight" }
     
     $component.Render = {
         param($self)
@@ -731,12 +731,12 @@ function global:New-TuiDialog {
     param([hashtable]$Props = @{})
     $component = New-TuiComponent -Props $Props
     $component.Type = "Dialog"
-    $component.Title = $Props.Title ?? "Dialog"
-    $component.Message = $Props.Message ?? ""
-    $component.Buttons = $Props.Buttons ?? @("OK")
+    $component.Title = if ($Props.Title) { $Props.Title } else { "Dialog" }
+    $component.Message = if ($Props.Message) { $Props.Message } else { "" }
+    $component.Buttons = if ($Props.Buttons) { $Props.Buttons } else { @("OK") }
     $component.SelectedButton = 0
-    $component.Width = $Props.Width ?? 50
-    $component.Height = $Props.Height ?? 10
+    $component.Width = if ($Props.Width) { $Props.Width } else { 50 }
+    $component.Height = if ($Props.Height) { $Props.Height } else { 10 }
     
     $component.Render = {
         param($self)
