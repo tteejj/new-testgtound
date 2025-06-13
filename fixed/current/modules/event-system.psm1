@@ -79,6 +79,9 @@ function global:Subscribe-Event {
     
     .PARAMETER HandlerId
     Optional unique identifier for the handler
+    
+    .PARAMETER Source
+    Optional source component ID for cleanup tracking
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -88,7 +91,10 @@ function global:Subscribe-Event {
         [scriptblock]$Handler,
         
         [Parameter()]
-        [string]$HandlerId = [Guid]::NewGuid().ToString()
+        [string]$HandlerId = [Guid]::NewGuid().ToString(),
+        
+        [Parameter()]
+        [string]$Source = $null
     )
     
     if (-not $script:EventHandlers.ContainsKey($EventName)) {
@@ -99,6 +105,7 @@ function global:Subscribe-Event {
         HandlerId = $HandlerId
         ScriptBlock = $Handler
         SubscribedAt = Get-Date
+        Source = $Source
     }
     
     $script:EventHandlers[$EventName] += $handlerInfo
@@ -244,6 +251,45 @@ function global:Get-EventHistory {
     return $history
 }
 
+function global:Remove-ComponentEventHandlers {
+    <#
+    .SYNOPSIS
+    Removes all event handlers associated with a specific component
+    
+    .PARAMETER ComponentId
+    The ID of the component whose handlers should be removed
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ComponentId
+    )
+    
+    $removedCount = 0
+    
+    # Iterate through all events and remove handlers with matching component ID
+    foreach ($eventName in @($script:EventHandlers.Keys)) {
+        $handlers = $script:EventHandlers[$eventName]
+        $newHandlers = @()
+        
+        foreach ($handler in $handlers) {
+            # Check if handler has Source property matching ComponentId
+            if ($handler.Source -ne $ComponentId) {
+                $newHandlers += $handler
+            } else {
+                $removedCount++
+            }
+        }
+        
+        if ($newHandlers.Count -eq 0) {
+            $script:EventHandlers.Remove($eventName)
+        } else {
+            $script:EventHandlers[$eventName] = $newHandlers
+        }
+    }
+    
+    Write-Verbose "Removed $removedCount event handlers for component: $ComponentId"
+}
+
 # Export functions
 Export-ModuleMember -Function @(
     'Initialize-EventSystem',
@@ -252,5 +298,6 @@ Export-ModuleMember -Function @(
     'Unsubscribe-Event',
     'Get-EventHandlers',
     'Clear-EventHandlers',
-    'Get-EventHistory'
+    'Get-EventHistory',
+    'Remove-ComponentEventHandlers'
 )

@@ -268,6 +268,12 @@ function Process-SingleKeyInput {
     param($keyInfo)
     
     try {
+        # Tab navigation handled globally
+        if ($keyInfo.Key -eq [ConsoleKey]::Tab) {
+            Handle-TabNavigation -Reverse ($keyInfo.Modifiers -band [ConsoleModifiers]::Shift)
+            return
+        }
+        
         # Dialog system gets first chance at input
         if ((Get-Command -Name "Handle-DialogInput" -ErrorAction SilentlyContinue) -and (Handle-DialogInput -Key $keyInfo)) {
             return
@@ -438,6 +444,11 @@ function Cleanup-TuiEngine {
         
         if ($script:TuiState.CancellationTokenSource) {
             try { $script:TuiState.CancellationTokenSource.Dispose() } catch { }
+        }
+
+        # Clean up background jobs
+        if (Get-Command -Name "Stop-AllTuiAsyncJobs" -ErrorAction SilentlyContinue) {
+            try { Stop-AllTuiAsyncJobs } catch { }
         }
 
         Cleanup-EventHandlers
@@ -766,6 +777,11 @@ function global:Register-Component {
 function global:Set-ComponentFocus {
     param([hashtable]$Component)
     
+    # Don't focus disabled components
+    if ($Component -and ($Component.IsEnabled -eq $false -or $Component.Disabled -eq $true)) {
+        return
+    }
+    
     # Blur previous component with error handling
     if ($script:TuiState.FocusedComponent -and $script:TuiState.FocusedComponent.OnBlur) {
         try {
@@ -791,6 +807,119 @@ function global:Set-ComponentFocus {
     }
     
     Request-TuiRefresh
+}
+
+function global:Clear-ComponentFocus {
+    <#
+    .SYNOPSIS
+    Clears focus from the current component
+    #>
+    if ($script:TuiState.FocusedComponent -and $script:TuiState.FocusedComponent.OnBlur) {
+        try {
+            & $script:TuiState.FocusedComponent.OnBlur -self $script:TuiState.FocusedComponent
+        } catch {
+            Write-Warning "Component blur error: $_"
+        }
+    }
+    
+    $script:TuiState.FocusedComponent = $null
+    
+    # Clear tracked focus on current screen
+    if ($script:TuiState.CurrentScreen) {
+        $script:TuiState.CurrentScreen.LastFocusedComponent = $null
+    }
+    
+    Request-TuiRefresh
+}
+
+function global:Get-NextFocusableComponent {
+    <#
+    .SYNOPSIS
+    Gets the next focusable component in tab order
+    #>
+    param(
+        [hashtable]$CurrentComponent,
+        [bool]$Reverse = $false
+    )
+    
+    if (-not $script:TuiState.CurrentScreen) { return $null }
+    
+    # Get all focusable components
+    $focusableComponents = @()
+    
+    # Recursive function to find focusable components
+    function Find-FocusableComponents {
+        param($Component)
+        
+        if ($Component.CanFocus -ne $false -and 
+            $Component.IsEnabled -ne $false -and 
+            $Component.Disabled -ne $true -and
+            $Component.IsVisible -ne $false -and
+            $Component.Visible -ne $false) {
+            $focusableComponents += $Component
+        }
+        
+        if ($Component.Children) {
+            foreach ($child in $Component.Children) {
+                Find-FocusableComponents -Component $child
+            }
+        }
+    }
+    
+    # Start from screen components
+    if ($script:TuiState.CurrentScreen.Components) {
+        if ($script:TuiState.CurrentScreen.Components -is [hashtable]) {
+            foreach ($comp in $script:TuiState.CurrentScreen.Components.Values) {
+                Find-FocusableComponents -Component $comp
+            }
+        } elseif ($script:TuiState.CurrentScreen.Components -is [array]) {
+            foreach ($comp in $script:TuiState.CurrentScreen.Components) {
+                Find-FocusableComponents -Component $comp
+            }
+        }
+    }
+    
+    if ($focusableComponents.Count -eq 0) { return $null }
+    
+    # Sort by TabIndex or position
+    $sorted = $focusableComponents | Sort-Object {
+        if ($null -ne $_.TabIndex) { $_.TabIndex }
+        else { $_.Y * 1000 + $_.X }
+    }
+    
+    if ($Reverse) {
+        [Array]::Reverse($sorted)
+    }
+    
+    # Find current index
+    $currentIndex = -1
+    for ($i = 0; $i -lt $sorted.Count; $i++) {
+        if ($sorted[$i] -eq $CurrentComponent) {
+            $currentIndex = $i
+            break
+        }
+    }
+    
+    # Get next component
+    if ($currentIndex -ge 0) {
+        $nextIndex = ($currentIndex + 1) % $sorted.Count
+        return $sorted[$nextIndex]
+    } else {
+        return $sorted[0]
+    }
+}
+
+function global:Handle-TabNavigation {
+    <#
+    .SYNOPSIS
+    Handles Tab key navigation between components
+    #>
+    param([bool]$Reverse = $false)
+    
+    $next = Get-NextFocusableComponent -CurrentComponent $script:TuiState.FocusedComponent -Reverse $Reverse
+    if ($next) {
+        Set-ComponentFocus -Component $next
+    }
 }
 
 function global:New-Component {
@@ -1098,6 +1227,16 @@ function Get-TextInputComponent {
                 Write-BufferBox -X $self.X -Y $self.Y -Width $self.Width -Height $self.Height `
                     -BorderColor $borderColor -BackgroundColor ([ConsoleColor]::Black)
                 
+                # Draw focus indicator
+                if ($self.Focused) {
+                    # Left bracket
+                    Write-BufferString -X ($self.X - 1) -Y ($self.Y + [Math]::Floor($self.Height / 2)) `
+                        -Text "[" -ForegroundColor ([ConsoleColor]::Yellow)
+                    # Right bracket
+                    Write-BufferString -X ($self.X + $self.Width) -Y ($self.Y + [Math]::Floor($self.Height / 2)) `
+                        -Text "]" -ForegroundColor ([ConsoleColor]::Yellow)
+                }
+                
                 # Draw text
                 $displayText = $self.Value
                 if ($displayText.Length > ($self.Width - 3)) {
@@ -1192,6 +1331,20 @@ function Get-ButtonComponent {
                 $x = $self.X + [Math]::Floor(($self.Width - $text.Length) / 2)
                 Write-BufferString -X $x -Y $self.Y -Text $text `
                     -ForegroundColor ([ConsoleColor]::White) -BackgroundColor $bgColor
+                
+                # Draw focus indicator
+                if ($self.Focused) {
+                    # Left bracket
+                    if ($x -gt 0) {
+                        Write-BufferString -X ($x - 1) -Y $self.Y `
+                            -Text "[" -ForegroundColor ([ConsoleColor]::Yellow)
+                    }
+                    # Right bracket
+                    if (($x + $text.Length) -lt $script:TuiState.BufferWidth) {
+                        Write-BufferString -X ($x + $text.Length) -Y $self.Y `
+                            -Text "]" -ForegroundColor ([ConsoleColor]::Yellow)
+                    }
+                }
             } catch {
                 Write-Warning "Button render error: $_"
             }
@@ -1306,7 +1459,9 @@ $exportFunctions = @(
     'Start-TuiLoop', 'Request-TuiRefresh', 'Push-Screen', 'Pop-Screen',
     'Write-BufferString', 'Write-BufferBox', 'Clear-BackBuffer',
     'Write-StatusLine', 'Get-BorderChars',
-    'Register-Component', 'Set-ComponentFocus', 'New-Component', 'Apply-Layout',
+    'Register-Component', 'Set-ComponentFocus', 'Clear-ComponentFocus', 
+    'Get-NextFocusableComponent', 'Handle-TabNavigation', 
+    'New-Component', 'Apply-Layout',
     'Get-WordWrappedLines', 'Subscribe-TuiEvent'
 )
 
