@@ -627,14 +627,22 @@ function global:Write-BufferString {
     
     $currentX = $X
     foreach ($char in $Text.ToCharArray()) {
-        if ($currentX -ge 0 -and $currentX -lt $script:TuiState.BufferWidth) {
+        if ($currentX -ge $script:TuiState.BufferWidth) { break }
+
+        if ($currentX -ge 0) {
             $script:TuiState.BackBuffer[$Y, $currentX] = @{ 
                 Char = $char
                 FG = $ForegroundColor
                 BG = $BackgroundColor 
             }
         }
-        $currentX++
+        
+        # Pragmatic check for CJK/wide characters. A full implementation is library-dependent.
+        if ($char -match '[\u1100-\u11FF\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFFEF]') {
+            $currentX += 2
+        } else {
+            $currentX++
+        }
     }
 }
 
