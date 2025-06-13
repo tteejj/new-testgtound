@@ -1,0 +1,22 @@
+C:\Users\jhnhe\Documents\GitHub\pmc-terminal\modular\experimental features\new testgtound\fixed\current
+		main.ps1
+	\screens
+		task-screen.psm1
+		dashboard-screen-grid.psm1
+		...others
+	\docs
+		all in your project knowledge
+	\modules
+		data-manager.psm1
+		dialog-system.psm1
+		event-system.psm1
+		theme-manager.psm1
+		tui-engine-v2.psm1
+		tui-framework.psm1
+	\components
+		tui-components.psm1
+		advanced-data-components.psm1
+		advanced-input-components.psm1
+	\utilities
+		empty, so far
+		

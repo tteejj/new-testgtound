@@ -23,9 +23,10 @@ $script:ModulesToLoad = @(
 
 # Screen modules will be loaded dynamically
 $script:ScreenModules = @(
-    "dashboard-screen",
+    "dashboard-screen-grid",
+#    "dashboard-screen",
     "time-entry-screen",
-    "task-management-screen",
+    "task-screen",
     "project-management-screen",
     "timer-management-screen",
     "reports-screen",
