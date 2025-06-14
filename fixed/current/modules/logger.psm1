@@ -1,113 +1,140 @@
-# modules/logger.psm1 - File-based Logger
+# Simple Logger Module for PMC Terminal
+# Provides basic logging functionality
 
-$script:LogFile = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "PMCTerminal\tui-debug.log"
-$script:LogEntries = [System.Collections.ArrayList]::Synchronized([System.Collections.ArrayList]::new())
-$script:MaxLogEntries = 500
-$script:LogSessionId = [Guid]::NewGuid().ToString().Split('-')[0]
+$script:LogPath = $null
+$script:LogLevel = "Info"
+$script:LogQueue = @()
+$script:MaxLogSize = 1MB
+$script:LogInitialized = $false
 
 function global:Initialize-Logger {
-    $script:LogEntries.Clear()
+    param(
+        [string]$LogDirectory = (Join-Path $env:TEMP "PMCTerminal"),
+        [string]$LogFileName = "pmc_terminal_{0:yyyy-MM-dd}.log" -f (Get-Date),
+        [string]$Level = "Info"
+    )
     
-    # Create directory if needed
-    $logDir = Split-Path $script:LogFile -Parent
-    if (-not (Test-Path $logDir)) {
-        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    try {
+        # Create log directory if it doesn't exist
+        if (-not (Test-Path $LogDirectory)) {
+            New-Item -ItemType Directory -Path $LogDirectory -Force | Out-Null
+        }
+        
+        $script:LogPath = Join-Path $LogDirectory $LogFileName
+        $script:LogLevel = $Level
+        $script:LogInitialized = $true
+        
+        # Write initialization message
+        Write-Log -Level Info -Message "Logger initialized at $($script:LogPath)"
+        
+    } catch {
+        Write-Warning "Failed to initialize logger: $_"
+        $script:LogInitialized = $false
     }
-    
-    # Start new session in log file
-    $sessionHeader = @"
-========================================
-NEW SESSION: $($script:LogSessionId)
-Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-PowerShell: $($PSVersionTable.PSVersion)
-========================================
-"@
-    Set-Content -Path $script:LogFile -Value $sessionHeader
-    Write-Log -Level Info -Message "Logger initialized. Log file: $($script:LogFile)"
 }
 
 function global:Write-Log {
     param(
-        [Parameter(Mandatory=$true)]
-        [ValidateSet("Info", "Warning", "Error", "Verbose", "Debug")]
-        [string]$Level,
-        
-        [Parameter(Mandatory=$true)]
+        [ValidateSet("Debug", "Verbose", "Info", "Warning", "Error")]
+        [string]$Level = "Info",
+        [Parameter(Mandatory)]
         [string]$Message,
-        
         [object]$Data = $null
     )
-
-    $timestamp = Get-Date -Format "HH:mm:ss.fff"
-    $entry = @{
-        Timestamp = $timestamp
-        Level     = $Level
-        Message   = $Message
-        Data      = $Data
-    }
-
-    # Add to in-memory list
-    $script:LogEntries.Insert(0, $entry)
-    if ($script:LogEntries.Count -gt $script:MaxLogEntries) {
-        $script:LogEntries.RemoveRange($script:MaxLogEntries, $script:LogEntries.Count - $script:MaxLogEntries)
-    }
-
-    # Format log line
-    $logLine = "[$timestamp] [$($Level.ToUpper().PadRight(7))] $Message"
     
-    # Add error details if present
-    if ($Data) {
-        if ($Data -is [System.Management.Automation.ErrorRecord]) {
-            $logLine += "`n    ERROR: $($Data.Exception.Message)"
-            $logLine += "`n    SCRIPT: $($Data.InvocationInfo.ScriptName):$($Data.InvocationInfo.ScriptLineNumber)"
-            $logLine += "`n    STACK: $($Data.ScriptStackTrace -replace "`n", "`n           ")"
-        } else {
-            $logLine += "`n    DATA: $($Data | ConvertTo-Json -Compress -Depth 2)"
-        }
+    # Skip if logger not initialized or if level is below threshold
+    if (-not $script:LogInitialized) { return }
+    
+    $levelPriority = @{
+        Debug = 0
+        Verbose = 1
+        Info = 2
+        Warning = 3
+        Error = 4
     }
     
-    # Write to file (thread-safe)
+    if ($levelPriority[$Level] -lt $levelPriority[$script:LogLevel]) { return }
+    
     try {
-        [System.IO.File]::AppendAllText($script:LogFile, "$logLine`n")
+        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+        $logEntry = "$timestamp [$Level] $Message"
+        
+        if ($Data) {
+            $dataStr = if ($Data -is [Exception]) {
+                "`n  Exception: $($Data.Message)`n  StackTrace: $($Data.StackTrace)"
+            } else {
+                "`n  Data: $($Data | ConvertTo-Json -Compress -Depth 2)"
+            }
+            $logEntry += $dataStr
+        }
+        
+        # Add to in-memory queue (for debug screen)
+        $script:LogQueue += @{
+            Timestamp = $timestamp
+            Level = $Level
+            Message = $Message
+            Data = $Data
+        }
+        
+        # Keep only last 1000 entries in memory
+        if ($script:LogQueue.Count -gt 1000) {
+            $script:LogQueue = $script:LogQueue[-1000..-1]
+        }
+        
+        # Write to file
+        if ($script:LogPath) {
+            # Check file size and rotate if needed
+            if ((Test-Path $script:LogPath) -and (Get-Item $script:LogPath).Length -gt $script:MaxLogSize) {
+                $archivePath = $script:LogPath -replace '\.log$', "_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+                Move-Item $script:LogPath $archivePath -Force
+            }
+            
+            Add-Content -Path $script:LogPath -Value $logEntry -Encoding UTF8
+        }
+        
     } catch {
-        # Fallback if file is locked
-        Start-Sleep -Milliseconds 50
-        Add-Content -Path $script:LogFile -Value $logLine
+        # Silently fail - we don't want logging errors to break the application
     }
 }
 
-function global:Get-Logs {
+function global:Get-LogEntries {
     param(
-        [string]$Level = $null,
-        [int]$Count = 50
+        [int]$Count = 100,
+        [string]$Level = $null
     )
     
-    $logs = $script:LogEntries.ToArray()
+    $entries = $script:LogQueue
+    
     if ($Level) {
-        $logs = $logs | Where-Object { $_.Level -eq $Level }
-    }
-    return $logs | Select-Object -First $Count
-}
-
-function global:Export-Logs {
-    param([string]$Path)
-    
-    if (-not $Path) {
-        $Path = Join-Path ([Environment]::GetFolderPath("Desktop")) "PMCTerminal_Logs_$(Get-Date -Format 'yyyyMMdd_HHmmss').xml"
+        $entries = $entries | Where-Object { $_.Level -eq $Level }
     }
     
-    $script:LogEntries.ToArray() | Export-Clixml -Path $Path
-    Write-Log -Level Info -Message "Logs exported to: $Path"
-    return $Path
+    return $entries | Select-Object -Last $Count
 }
 
-function global:Clear-Logs {
-    $script:LogEntries.Clear()
-    Write-Log -Level Info -Message "In-memory log entries cleared"
+function global:Clear-LogQueue {
+    $script:LogQueue = @()
 }
 
-function global:Get-LogFilePath {
-    return $script:LogFile
+function global:Set-LogLevel {
+    param(
+        [ValidateSet("Debug", "Verbose", "Info", "Warning", "Error")]
+        [string]$Level
+    )
+    
+    $script:LogLevel = $Level
+    Write-Log -Level Info -Message "Log level changed to $Level"
 }
 
-Export-ModuleMember -Function 'Initialize-Logger', 'Write-Log', 'Get-Logs', 'Export-Logs', 'Clear-Logs', 'Get-LogFilePath'
+function global:Get-LogPath {
+    return $script:LogPath
+}
+
+Export-ModuleMember -Function @(
+    'Initialize-Logger',
+    'Write-Log',
+    'Get-LogEntries',
+    'Clear-LogQueue',
+    'Set-LogLevel',
+    'Get-LogPath'
+)

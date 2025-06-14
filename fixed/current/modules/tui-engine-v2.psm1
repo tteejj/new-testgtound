@@ -688,7 +688,7 @@ function global:Write-BufferString {
         if ($char -match '[\u1100-\u11FF\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFFEF]') {
             $currentX += 2
             # Also fill the next cell with a space for wide characters to prevent overlap
-            if ($currentX -lt $script:TuiState.BufferWidth) {
+            if ($currentX -lt $script:TuiState.BufferWidth -and $currentX -gt 0) {
                 $script:TuiState.BackBuffer[$Y, $currentX - 1] = @{ 
                     Char = ' '
                     FG = $ForegroundColor

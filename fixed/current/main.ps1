@@ -19,6 +19,9 @@ $script:ModulesToLoad = @(
     @{ Name = "tui-components"; Path = "components\tui-components.psm1"; Required = $true },
     @{ Name = "advanced-input-components"; Path = "components\advanced-input-components.psm1"; Required = $false },
     @{ Name = "advanced-data-components"; Path = "components\advanced-data-components.psm1"; Required = $false },
+    @{ Name = "layout-manager"; Path = "utilities\layout-manager.psm1"; Required = $false },
+    @{ Name = "positioning-helper"; Path = "utilities\positioning-helper.psm1"; Required = $false },
+    @{ Name = "focus-manager"; Path = "utilities\focus-manager.psm1"; Required = $false },
     @{ Name = "tui-framework"; Path = "modules\tui-framework.psm1"; Required = $false }
 )
 
@@ -166,6 +169,14 @@ function Start-PMCTerminal {
             Initialize-TuiFramework
             if (-not $Silent) {
                 Write-Host "  TUI Framework initialized" -ForegroundColor Gray
+            }
+        }
+        
+        # Initialize focus manager
+        if (Get-Command -Name "Initialize-FocusManager" -ErrorAction SilentlyContinue) {
+            Initialize-FocusManager
+            if (-not $Silent) {
+                Write-Host "  Focus Manager initialized" -ForegroundColor Gray
             }
         }
         

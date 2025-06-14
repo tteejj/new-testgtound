@@ -1,203 +1,259 @@
-# Debug Log Screen - View application logs
-# Compliant with new programmatic architecture
+# Debug Log Screen
+# Shows application log entries for debugging
 
 function global:Get-DebugLogScreen {
     $screen = @{
         Name = "DebugLogScreen"
         
-        # State
         State = @{
-            Logs = @()
-            FilterLevel = "All"
-            ScrollOffset = 0
-            MaxDisplayLines = 20
-            LogFilePath = ""
+            logEntries = @()
+            scrollOffset = 0
+            selectedLine = 0
+            filterLevel = "All"
+            autoScroll = $true
+            lastLogCount = 0
         }
         
-        # Components
         Components = @{}
         
-        # Initialize
         Init = {
             param($self)
             
-            Write-Log -Level Debug -Message "Debug Log Screen initialized"
-            
-            # Get log file path
-            if (Get-Command Get-LogFilePath -ErrorAction SilentlyContinue) {
-                $self.State.LogFilePath = Get-LogFilePath
-            } else {
-                $self.State.LogFilePath = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "PMCTerminal\tui-debug.log"
+            # Get initial log entries
+            if (Get-Command Get-LogEntries -ErrorAction SilentlyContinue) {
+                $self.State.logEntries = @(Get-LogEntries -Count 500)
+                $self.State.lastLogCount = $self.State.logEntries.Count
             }
             
-            # Refresh logs
-            $self.RefreshLogs = {
-                param($s)
-                
-                try {
-                    if (Get-Command Get-Logs -ErrorAction SilentlyContinue) {
-                        $allLogs = Get-Logs -Count 500
-                        
-                        # Filter by level if needed
-                        if ($s.State.FilterLevel -ne "All") {
-                            $s.State.Logs = $allLogs | Where-Object { $_.Level -eq $s.State.FilterLevel }
-                        } else {
-                            $s.State.Logs = $allLogs
-                        }
-                    } else {
-                        $s.State.Logs = @()
-                    }
-                } catch {
-                    $s.State.Logs = @(@{
-                        Timestamp = (Get-Date -Format "HH:mm:ss")
-                        Level = "Error"
-                        Message = "Failed to retrieve logs: $_"
-                    })
-                }
+            # Auto-scroll to bottom
+            if ($self.State.autoScroll -and $self.State.logEntries.Count -gt 0) {
+                $visibleLines = $global:TuiState.BufferHeight - 8
+                $self.State.scrollOffset = [Math]::Max(0, $self.State.logEntries.Count - $visibleLines)
+                $self.State.selectedLine = $self.State.logEntries.Count - 1
             }
-            
-            # Initial load
-            & $self.RefreshLogs -s $self
         }
         
-        # Render
         Render = {
             param($self)
             
-            # Header
-            Write-BufferBox -X 1 -Y 1 -Width ($global:TuiState.BufferWidth - 2) -Height 3 -Title " Debug Log Viewer " -BorderColor (Get-ThemeColor "Info")
-            Write-BufferString -X 3 -Y 2 -Text "Filter: $($self.State.FilterLevel) | Logs: $($self.State.Logs.Count) | File: $($self.State.LogFilePath)" -ForegroundColor (Get-ThemeColor "Subtle")
-            
-            # Log display area
-            $logBoxY = 5
-            $logBoxHeight = $global:TuiState.BufferHeight - 9
-            Write-BufferBox -X 1 -Y $logBoxY -Width ($global:TuiState.BufferWidth - 2) -Height $logBoxHeight -Title " Logs " -BorderColor (Get-ThemeColor "Border")
-            
-            # Display logs
-            $startY = $logBoxY + 1
-            $endY = $logBoxY + $logBoxHeight - 2
-            $displayableLines = $endY - $startY + 1
-            
-            if ($self.State.Logs.Count -eq 0) {
-                Write-BufferString -X 3 -Y ($startY + 2) -Text "No logs to display" -ForegroundColor (Get-ThemeColor "Subtle")
-            } else {
-                $startIndex = $self.State.ScrollOffset
-                $endIndex = [Math]::Min($startIndex + $displayableLines - 1, $self.State.Logs.Count - 1)
-                
-                for ($i = $startIndex; $i -le $endIndex; $i++) {
-                    $log = $self.State.Logs[$i]
-                    $y = $startY + ($i - $startIndex)
+            # Update log entries if new ones available
+            if (Get-Command Get-LogEntries -ErrorAction SilentlyContinue) {
+                $currentEntries = @(Get-LogEntries -Count 500)
+                if ($currentEntries.Count -ne $self.State.lastLogCount) {
+                    $self.State.logEntries = $currentEntries
+                    $self.State.lastLogCount = $currentEntries.Count
                     
-                    # Color based on level
-                    $color = switch ($log.Level) {
-                        "Error" { "Red" }
-                        "Warning" { "Yellow" }
-                        "Info" { "Cyan" }
-                        "Debug" { "Gray" }
-                        "Verbose" { "DarkGray" }
-                        default { "White" }
+                    # Auto-scroll to bottom for new entries
+                    if ($self.State.autoScroll) {
+                        $visibleLines = $global:TuiState.BufferHeight - 8
+                        $self.State.scrollOffset = [Math]::Max(0, $self.State.logEntries.Count - $visibleLines)
+                        $self.State.selectedLine = $self.State.logEntries.Count - 1
                     }
-                    
-                    # Format log line
-                    $logLine = "[$($log.Timestamp)] [$($log.Level.PadRight(7))] $($log.Message)"
-                    if ($logLine.Length -gt ($global:TuiState.BufferWidth - 6)) {
-                        $logLine = $logLine.Substring(0, $global:TuiState.BufferWidth - 9) + "..."
-                    }
-                    
-                    Write-BufferString -X 3 -Y $y -Text $logLine -ForegroundColor $color
-                }
-                
-                # Scroll indicator
-                if ($self.State.Logs.Count -gt $displayableLines) {
-                    $scrollPercent = if ($self.State.Logs.Count -gt $displayableLines) {
-                        [Math]::Round(($self.State.ScrollOffset / ($self.State.Logs.Count - $displayableLines)) * 100)
-                    } else { 0 }
-                    $scrollText = "[$scrollPercent%]"
-                    Write-BufferString -X ($global:TuiState.BufferWidth - $scrollText.Length - 3) -Y $logBoxY -Text $scrollText -ForegroundColor (Get-ThemeColor "Accent")
                 }
             }
             
-            # Help bar
-            $helpY = $global:TuiState.BufferHeight - 2
-            Write-BufferString -X 2 -Y $helpY -Text "↑/↓: Scroll | PgUp/PgDn: Page | F: Filter | R: Refresh | C: Clear | O: Open File | Esc: Back" -ForegroundColor (Get-ThemeColor "Subtle")
+            # Header
+            $headerColor = Get-ThemeColor "Header"
+            Write-BufferString -X 2 -Y 1 -Text "Debug Log Viewer" -ForegroundColor $headerColor
+            Write-BufferString -X 30 -Y 1 -Text "Filter: $($self.State.filterLevel)" -ForegroundColor (Get-ThemeColor "Info")
+            Write-BufferString -X 50 -Y 1 -Text "Auto-scroll: $($self.State.autoScroll)" -ForegroundColor (Get-ThemeColor "Success")
+            
+            # Main log area
+            $logY = 3
+            $logHeight = $global:TuiState.BufferHeight - 6
+            Write-BufferBox -X 1 -Y 2 -Width ($global:TuiState.BufferWidth - 2) -Height ($logHeight + 2) `
+                -Title " Log Entries ($($self.State.logEntries.Count)) " -BorderColor (Get-ThemeColor "Border")
+            
+            # Filter entries
+            $filteredEntries = if ($self.State.filterLevel -eq "All") {
+                $self.State.logEntries
+            } else {
+                $self.State.logEntries | Where-Object { $_.Level -eq $self.State.filterLevel }
+            }
+            
+            # Display log entries
+            $visibleStart = $self.State.scrollOffset
+            $visibleEnd = [Math]::Min($filteredEntries.Count - 1, $visibleStart + $logHeight - 1)
+            
+            for ($i = $visibleStart; $i -le $visibleEnd; $i++) {
+                $entry = $filteredEntries[$i]
+                if (-not $entry) { continue }
+                
+                $y = $logY + ($i - $visibleStart)
+                $isSelected = ($i -eq $self.State.selectedLine)
+                
+                # Level colors
+                $levelColor = switch ($entry.Level) {
+                    "Debug" { Get-ThemeColor "Subtle" }
+                    "Verbose" { Get-ThemeColor "Secondary" }
+                    "Info" { Get-ThemeColor "Primary" }
+                    "Warning" { Get-ThemeColor "Warning" }
+                    "Error" { Get-ThemeColor "Danger" }
+                    default { Get-ThemeColor "Primary" }
+                }
+                
+                # Background for selected line
+                if ($isSelected) {
+                    $bg = Get-ThemeColor "Accent"
+                    Write-BufferString -X 2 -Y $y -Text (" " * ($global:TuiState.BufferWidth - 4)) -BackgroundColor $bg
+                } else {
+                    $bg = Get-ThemeColor "Background"
+                }
+                
+                # Format log line
+                $timestamp = if ($entry.Timestamp) { $entry.Timestamp } else { "" }
+                $level = if ($entry.Level) { "[$($entry.Level.PadRight(7))]" } else { "[Unknown]" }
+                $message = if ($entry.Message) { $entry.Message } else { "" }
+                
+                # Truncate message if too long
+                $maxMessageLength = $global:TuiState.BufferWidth - 30
+                if ($message.Length -gt $maxMessageLength) {
+                    $message = $message.Substring(0, $maxMessageLength - 3) + "..."
+                }
+                
+                # Write log entry
+                Write-BufferString -X 2 -Y $y -Text $timestamp -ForegroundColor (Get-ThemeColor "Subtle") -BackgroundColor $bg
+                Write-BufferString -X 25 -Y $y -Text $level -ForegroundColor $levelColor -BackgroundColor $bg
+                Write-BufferString -X 35 -Y $y -Text $message -ForegroundColor (Get-ThemeColor "Primary") -BackgroundColor $bg
+            }
+            
+            # Scrollbar
+            if ($filteredEntries.Count -gt $logHeight) {
+                $scrollbarHeight = $logHeight
+                $scrollPos = if ($filteredEntries.Count -gt 1) {
+                    [Math]::Floor(($self.State.scrollOffset / ($filteredEntries.Count - $logHeight)) * ($scrollbarHeight - 1))
+                } else { 0 }
+                
+                for ($i = 0; $i -lt $scrollbarHeight; $i++) {
+                    $char = if ($i -eq $scrollPos) { "█" } else { "│" }
+                    $color = if ($i -eq $scrollPos) { Get-ThemeColor "Accent" } else { Get-ThemeColor "Subtle" }
+                    Write-BufferString -X ($global:TuiState.BufferWidth - 2) -Y ($logY + $i) -Text $char -ForegroundColor $color
+                }
+            }
+            
+            # Status bar
+            $statusY = $global:TuiState.BufferHeight - 2
+            Write-BufferString -X 2 -Y $statusY -Text "↑↓: Navigate • F: Filter • A: Auto-scroll • C: Clear • Esc: Back" `
+                -ForegroundColor (Get-ThemeColor "Subtle")
+            
+            # Display selected entry details if available
+            if ($isSelected -and $entry.Data) {
+                $detailText = "Data: $($entry.Data | ConvertTo-Json -Compress)"
+                if ($detailText.Length -gt ($global:TuiState.BufferWidth - 4)) {
+                    $detailText = $detailText.Substring(0, $global:TuiState.BufferWidth - 7) + "..."
+                }
+                Write-BufferString -X 2 -Y ($statusY - 1) -Text $detailText -ForegroundColor (Get-ThemeColor "Info")
+            }
         }
         
-        # Handle Input
         HandleInput = {
             param($self, $Key)
             
+            $filteredEntries = if ($self.State.filterLevel -eq "All") {
+                $self.State.logEntries
+            } else {
+                $self.State.logEntries | Where-Object { $_.Level -eq $self.State.filterLevel }
+            }
+            
+            $logHeight = $global:TuiState.BufferHeight - 8
+            
             switch ($Key.Key) {
-                ([ConsoleKey]::Escape) { 
-                    Pop-Screen
-                    return $true 
-                }
-                
+                ([ConsoleKey]::Escape) { return "Back" }
                 ([ConsoleKey]::UpArrow) {
-                    if ($self.State.ScrollOffset -gt 0) {
-                        $self.State.ScrollOffset--
+                    if ($self.State.selectedLine -gt 0) {
+                        $self.State.selectedLine--
+                        $self.State.autoScroll = $false
+                        
+                        # Adjust scroll if needed
+                        if ($self.State.selectedLine -lt $self.State.scrollOffset) {
+                            $self.State.scrollOffset = $self.State.selectedLine
+                        }
                         Request-TuiRefresh
                     }
                     return $true
                 }
-                
                 ([ConsoleKey]::DownArrow) {
-                    $maxScroll = [Math]::Max(0, $self.State.Logs.Count - ($global:TuiState.BufferHeight - 9))
-                    if ($self.State.ScrollOffset -lt $maxScroll) {
-                        $self.State.ScrollOffset++
+                    if ($self.State.selectedLine -lt ($filteredEntries.Count - 1)) {
+                        $self.State.selectedLine++
+                        
+                        # Re-enable auto-scroll if at bottom
+                        if ($self.State.selectedLine -eq ($filteredEntries.Count - 1)) {
+                            $self.State.autoScroll = $true
+                        }
+                        
+                        # Adjust scroll if needed
+                        if ($self.State.selectedLine -ge ($self.State.scrollOffset + $logHeight)) {
+                            $self.State.scrollOffset = $self.State.selectedLine - $logHeight + 1
+                        }
                         Request-TuiRefresh
                     }
                     return $true
                 }
-                
                 ([ConsoleKey]::PageUp) {
-                    $pageSize = $global:TuiState.BufferHeight - 10
-                    $self.State.ScrollOffset = [Math]::Max(0, $self.State.ScrollOffset - $pageSize)
+                    $self.State.selectedLine = [Math]::Max(0, $self.State.selectedLine - $logHeight)
+                    $self.State.scrollOffset = [Math]::Max(0, $self.State.scrollOffset - $logHeight)
+                    $self.State.autoScroll = $false
                     Request-TuiRefresh
                     return $true
                 }
-                
                 ([ConsoleKey]::PageDown) {
-                    $pageSize = $global:TuiState.BufferHeight - 10
-                    $maxScroll = [Math]::Max(0, $self.State.Logs.Count - ($global:TuiState.BufferHeight - 9))
-                    $self.State.ScrollOffset = [Math]::Min($maxScroll, $self.State.ScrollOffset + $pageSize)
-                    Request-TuiRefresh
-                    return $true
-                }
-                
-                ([ConsoleKey]::R) {
-                    # Refresh logs
-                    & $self.RefreshLogs -s $self
-                    $self.State.ScrollOffset = 0
-                    Request-TuiRefresh
-                    return $true
-                }
-                
-                ([ConsoleKey]::F) {
-                    # Cycle filter
-                    $filters = @("All", "Error", "Warning", "Info", "Debug", "Verbose")
-                    $currentIndex = [array]::IndexOf($filters, $self.State.FilterLevel)
-                    $self.State.FilterLevel = $filters[($currentIndex + 1) % $filters.Count]
-                    & $self.RefreshLogs -s $self
-                    $self.State.ScrollOffset = 0
-                    Request-TuiRefresh
-                    return $true
-                }
-                
-                ([ConsoleKey]::C) {
-                    # Clear logs
-                    if (Get-Command Clear-Logs -ErrorAction SilentlyContinue) {
-                        Clear-Logs
-                        & $self.RefreshLogs -s $self
-                        $self.State.ScrollOffset = 0
-                        Request-TuiRefresh
+                    $maxLine = $filteredEntries.Count - 1
+                    $self.State.selectedLine = [Math]::Min($maxLine, $self.State.selectedLine + $logHeight)
+                    $self.State.scrollOffset = [Math]::Min([Math]::Max(0, $maxLine - $logHeight + 1), $self.State.scrollOffset + $logHeight)
+                    
+                    # Re-enable auto-scroll if at bottom
+                    if ($self.State.selectedLine -eq $maxLine) {
+                        $self.State.autoScroll = $true
                     }
+                    Request-TuiRefresh
                     return $true
                 }
-                
-                ([ConsoleKey]::O) {
-                    # Open log file in default editor
-                    if (Test-Path $self.State.LogFilePath) {
-                        Start-Process $self.State.LogFilePath
+                ([ConsoleKey]::Home) {
+                    $self.State.selectedLine = 0
+                    $self.State.scrollOffset = 0
+                    $self.State.autoScroll = $false
+                    Request-TuiRefresh
+                    return $true
+                }
+                ([ConsoleKey]::End) {
+                    $self.State.selectedLine = $filteredEntries.Count - 1
+                    $self.State.scrollOffset = [Math]::Max(0, $filteredEntries.Count - $logHeight)
+                    $self.State.autoScroll = $true
+                    Request-TuiRefresh
+                    return $true
+                }
+                ([ConsoleKey]::F) {
+                    # Cycle through filter levels
+                    $levels = @("All", "Debug", "Verbose", "Info", "Warning", "Error")
+                    $currentIndex = [array]::IndexOf($levels, $self.State.filterLevel)
+                    $self.State.filterLevel = $levels[($currentIndex + 1) % $levels.Count]
+                    
+                    # Reset selection
+                    $self.State.selectedLine = 0
+                    $self.State.scrollOffset = 0
+                    Request-TuiRefresh
+                    return $true
+                }
+                ([ConsoleKey]::A) {
+                    # Toggle auto-scroll
+                    $self.State.autoScroll = -not $self.State.autoScroll
+                    if ($self.State.autoScroll) {
+                        # Jump to bottom
+                        $self.State.selectedLine = $filteredEntries.Count - 1
+                        $self.State.scrollOffset = [Math]::Max(0, $filteredEntries.Count - $logHeight)
+                    }
+                    Request-TuiRefresh
+                    return $true
+                }
+                ([ConsoleKey]::C) {
+                    # Clear log
+                    if (Get-Command Clear-LogQueue -ErrorAction SilentlyContinue) {
+                        Clear-LogQueue
+                        $self.State.logEntries = @()
+                        $self.State.scrollOffset = 0
+                        $self.State.selectedLine = 0
+                        $self.State.lastLogCount = 0
+                        Request-TuiRefresh
                     }
                     return $true
                 }

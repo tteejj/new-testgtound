@@ -266,7 +266,7 @@ function global:Get-DashboardScreen {
                     foreach ($kvp in $self.Components.GetEnumerator()) {
                         $component = $kvp.Value
                         if ($component -and $component.Visible -ne $false) {
-                            # Set focus state
+                            # Set focus state based on screen's tracking
                             $component.IsFocused = ($self.FocusedComponentName -eq $kvp.Key)
                             if ($component.Render) {
                                 & $component.Render -self $component
@@ -383,8 +383,21 @@ function global:Get-DashboardScreen {
                         
                         if ($focusableComponents.Count -gt 0) {
                             $currentIndex = [array]::IndexOf($focusableComponents, $self.FocusedComponentName)
-                            $nextIndex = ($currentIndex + 1) % $focusableComponents.Count
+                            if ($Key.Modifiers -band [ConsoleModifiers]::Shift) {
+                                # Shift+Tab - go backwards
+                                $nextIndex = ($currentIndex - 1 + $focusableComponents.Count) % $focusableComponents.Count
+                            } else {
+                                # Tab - go forwards
+                                $nextIndex = ($currentIndex + 1) % $focusableComponents.Count
+                            }
                             $self.FocusedComponentName = $focusableComponents[$nextIndex]
+                            
+                            # Update engine's focus tracking
+                            $focusedComponent = $self.Components[$self.FocusedComponentName]
+                            if ($focusedComponent -and (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue)) {
+                                Set-ComponentFocus -Component $focusedComponent
+                            }
+                            
                             Write-Log -Level Debug -Message "Focus changed to: $($self.FocusedComponentName)"
                             Request-TuiRefresh
                         }
@@ -466,6 +479,12 @@ function global:Get-DashboardScreen {
                 if ($component) {
                     $component.IsFocused = ($kvp.Key -eq $self.FocusedComponentName)
                 }
+            }
+            
+            # Set engine focus to match screen's focus
+            $focusedComponent = $self.Components[$self.FocusedComponentName]
+            if ($focusedComponent -and (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue)) {
+                Set-ComponentFocus -Component $focusedComponent
             }
             
             Request-TuiRefresh
