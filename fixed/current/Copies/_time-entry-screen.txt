@@ -201,14 +201,12 @@ function global:Get-TimeEntryFormScreen {
                 X = $formX + 21; Y = $formY + 5
                 Text = ""
                 ForegroundColor = Red
-                Visible = $false
             }
             
             $self.Components.hoursError = New-TuiLabel -Props @{
                 X = $formX + 21; Y = $formY + 8
                 Text = ""
                 ForegroundColor = Red
-                Visible = $false
             }
             
             # Focus management
@@ -233,23 +231,25 @@ function global:Get-TimeEntryFormScreen {
             # Update error visibility
             if ($self.State.ValidationErrors.Project) {
                 $self.Components.projectError.Text = $self.State.ValidationErrors.Project
-                $self.Components.projectError.Visible = $true
             } else {
-                $self.Components.projectError.Visible = $false
+                $self.Components.projectError.Text = ""
             }
             
             if ($self.State.ValidationErrors.Hours) {
                 $self.Components.hoursError.Text = $self.State.ValidationErrors.Hours
-                $self.Components.hoursError.Visible = $true
             } else {
-                $self.Components.hoursError.Visible = $false
+                $self.Components.hoursError.Text = ""
             }
             
             # Render all components
-            foreach ($component in $self.Components.Values) {
-                if ($component.Visible -ne $false) {
-                    $component.IsFocused = ($self.FocusedComponentName -eq ($self.Components.GetEnumerator() | Where-Object { $_.Value -eq $component } | Select-Object -First 1).Key)
-                    & $component.Render -self $component
+            foreach ($kvp in $self.Components.GetEnumerator()) {
+                $component = $kvp.Value
+                if ($component -and $component.Visible -ne $false) {
+                    # Set focus state
+                    $component.IsFocused = ($self.FocusedComponentName -eq $kvp.Key)
+                    if ($component.Render) {
+                        & $component.Render -self $component
+                    }
                 }
             }
             
