@@ -23,11 +23,11 @@ function global:Get-TaskManagementScreen {
         # Focus management
         FocusedComponentName = 'taskTable'
         
-        # Define helper methods
+        # Define helper methods directly on the screen
         GetFilteredTasks = {
-            param($self)
-            $tasks = $self.State.tasks
-            $filter = $self.State.filter
+            param($screen)
+            $tasks = $screen.State.tasks
+            $filter = $screen.State.filter
             
             # Apply filter
             $filtered = switch ($filter) {
@@ -37,7 +37,7 @@ function global:Get-TaskManagementScreen {
             }
             
             # Apply sort
-            $sorted = switch ($self.State.sortBy) {
+            $sorted = switch ($screen.State.sortBy) {
                 "priority" { 
                     $filtered | Sort-Object @{
                         Expression = {
@@ -69,21 +69,21 @@ function global:Get-TaskManagementScreen {
         }
         
         RefreshTaskTable = {
-            param($self)
-            $tableData = & $self.GetFilteredTasks -self $self
-            if ($self.Components.taskTable.Data) {
-                $self.Components.taskTable.Data = $tableData
+            param($screen)
+            $tableData = & $screen.GetFilteredTasks -screen $screen
+            if ($screen.Components.taskTable.Data) {
+                $screen.Components.taskTable.Data = $tableData
             } else {
-                $self.Components.taskTable.Rows = $tableData
+                $screen.Components.taskTable.Rows = $tableData
             }
             Request-TuiRefresh
         }
         
         ShowAddTaskForm = {
-            param($self)
-            $self.State.showingForm = $true
-            $self.State.editingTaskId = $null
-            $self.State.formData = @{
+            param($screen)
+            $screen.State.showingForm = $true
+            $screen.State.editingTaskId = $null
+            $screen.State.formData = @{
                 title = ""
                 description = ""
                 category = "Work"
@@ -92,33 +92,33 @@ function global:Get-TaskManagementScreen {
             }
             
             # Update form components
-            $self.Components.formTitle.Text = ""
-            $self.Components.formDescription.Text = ""
-            $self.Components.formCategory.Value = "Work"
-            $self.Components.formPriority.Value = "Medium"
-            $self.Components.formDueDate.Value = (Get-Date).AddDays(7)
+            $screen.Components.formTitle.Text = ""
+            $screen.Components.formDescription.Text = ""
+            $screen.Components.formCategory.Value = "Work"
+            $screen.Components.formPriority.Value = "Medium"
+            $screen.Components.formDueDate.Value = (Get-Date).AddDays(7)
             
             # Show form components
             foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
-                $self.Components[$comp].Visible = $true
+                $screen.Components[$comp].Visible = $true
             }
             
             # Hide table
-            $self.Components.taskTable.Visible = $false
+            $screen.Components.taskTable.Visible = $false
             
             # Focus first field
-            $self.FocusedComponentName = 'formTitle'
+            $screen.FocusedComponentName = 'formTitle'
             Request-TuiRefresh
         }
         
         ShowEditTaskForm = {
-            param($self, $taskId)
-            $task = $self.State.tasks | Where-Object { $_.Id -eq $taskId }
+            param($screen, $taskId)
+            $task = $screen.State.tasks | Where-Object { $_.Id -eq $taskId }
             if (-not $task) { return }
             
-            $self.State.showingForm = $true
-            $self.State.editingTaskId = $task.Id
-            $self.State.formData = @{
+            $screen.State.showingForm = $true
+            $screen.State.editingTaskId = $task.Id
+            $screen.State.formData = @{
                 title = $task.Title
                 description = $task.Description
                 category = $task.Category
@@ -127,33 +127,33 @@ function global:Get-TaskManagementScreen {
             }
             
             # Update form components
-            $self.Components.formTitle.Text = $task.Title
-            $self.Components.formDescription.Text = $task.Description
-            $self.Components.formCategory.Value = $task.Category
-            $self.Components.formPriority.Value = $task.Priority
-            $self.Components.formDueDate.Value = [DateTime]::Parse($task.DueDate)
+            $screen.Components.formTitle.Text = $task.Title
+            $screen.Components.formDescription.Text = $task.Description
+            $screen.Components.formCategory.Value = $task.Category
+            $screen.Components.formPriority.Value = $task.Priority
+            $screen.Components.formDueDate.Value = [DateTime]::Parse($task.DueDate)
             
             # Show form components
             foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
-                $self.Components[$comp].Visible = $true
+                $screen.Components[$comp].Visible = $true
             }
             
             # Hide table
-            $self.Components.taskTable.Visible = $false
+            $screen.Components.taskTable.Visible = $false
             
             # Focus first field
-            $self.FocusedComponentName = 'formTitle'
+            $screen.FocusedComponentName = 'formTitle'
             Request-TuiRefresh
         }
         
         SaveTask = {
-            param($self)
-            $formData = $self.State.formData
-            $editingId = $self.State.editingTaskId
+            param($screen)
+            $formData = $screen.State.formData
+            $editingId = $screen.State.editingTaskId
             
             if ($editingId) {
                 # Update existing
-                $task = $self.State.tasks | Where-Object { $_.Id -eq $editingId }
+                $task = $screen.State.tasks | Where-Object { $_.Id -eq $editingId }
                 if ($task) {
                     $task.Title = $formData.title
                     $task.Description = $formData.description
@@ -174,44 +174,44 @@ function global:Get-TaskManagementScreen {
                     Created = Get-Date
                     Completed = $null
                 }
-                $self.State.tasks += $newTask
+                $screen.State.tasks += $newTask
             }
             
-            & $self.HideForm -self $self
-            & $self.RefreshTaskTable -self $self
+            & $screen.HideForm -screen $screen
+            & $screen.RefreshTaskTable -screen $screen
         }
         
         HideForm = {
-            param($self)
-            $self.State.showingForm = $false
+            param($screen)
+            $screen.State.showingForm = $false
             
             # Hide form components
             foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
-                $self.Components[$comp].Visible = $false
+                $screen.Components[$comp].Visible = $false
             }
             
             # Show table
-            $self.Components.taskTable.Visible = $true
-            $self.FocusedComponentName = 'taskTable'
+            $screen.Components.taskTable.Visible = $true
+            $screen.FocusedComponentName = 'taskTable'
             Request-TuiRefresh
         }
         
         DeleteTask = {
-            param($self)
-            $selectedRow = $self.Components.taskTable.SelectedRow
-            if ($selectedRow -ge 0 -and $selectedRow -lt $self.Components.taskTable.Rows.Count) {
-                $taskData = $self.Components.taskTable.Rows[$selectedRow]
-                $self.State.tasks = @($self.State.tasks | Where-Object { $_.Id -ne $taskData.Id })
-                & $self.RefreshTaskTable -self $self
+            param($screen)
+            $selectedRow = $screen.Components.taskTable.SelectedRow
+            if ($selectedRow -ge 0 -and $selectedRow -lt $screen.Components.taskTable.Rows.Count) {
+                $taskData = $screen.Components.taskTable.Rows[$selectedRow]
+                $screen.State.tasks = @($screen.State.tasks | Where-Object { $_.Id -ne $taskData.Id })
+                & $screen.RefreshTaskTable -screen $screen
             }
         }
         
         ToggleTaskStatus = {
-            param($self)
-            $selectedRow = $self.Components.taskTable.SelectedRow
-            if ($selectedRow -ge 0 -and $selectedRow -lt $self.Components.taskTable.Rows.Count) {
-                $taskData = $self.Components.taskTable.Rows[$selectedRow]
-                $task = $self.State.tasks | Where-Object { $_.Id -eq $taskData.Id }
+            param($screen)
+            $selectedRow = $screen.Components.taskTable.SelectedRow
+            if ($selectedRow -ge 0 -and $selectedRow -lt $screen.Components.taskTable.Rows.Count) {
+                $taskData = $screen.Components.taskTable.Rows[$selectedRow]
+                $task = $screen.State.tasks | Where-Object { $_.Id -eq $taskData.Id }
                 if ($task) {
                     if ($task.Status -eq "Active") {
                         $task.Status = "Completed"
@@ -220,7 +220,7 @@ function global:Get-TaskManagementScreen {
                         $task.Status = "Active"
                         $task.Completed = $null
                     }
-                    & $self.RefreshTaskTable -self $self
+                    & $screen.RefreshTaskTable -screen $screen
                 }
             }
         }
@@ -280,7 +280,7 @@ function global:Get-TaskManagementScreen {
                         @{ Name = "Category"; Header = "Category"; Width = 11 }
                         @{ Name = "DueDate"; Header = "Due Date"; Width = 10 }
                     )
-                    Data = & $self.GetFilteredTasks -self $self
+                    Data = & $self.GetFilteredTasks -screen $self
                     AllowSort = $false  # We handle sorting ourselves
                     AllowFilter = $false
                     MultiSelect = $false
@@ -296,7 +296,7 @@ function global:Get-TaskManagementScreen {
                                 $task.Status = "Active"
                                 $task.Completed = $null
                             }
-                            & $tableScreen.RefreshTaskTable -self $tableScreen
+                            & $tableScreen.RefreshTaskTable -screen $tableScreen
                         }
                     }
                 }
@@ -312,7 +312,7 @@ function global:Get-TaskManagementScreen {
                         @{ Name = "Category"; Header = "Category" }
                         @{ Name = "DueDate"; Header = "Due Date" }
                     )
-                    Rows = & $self.GetFilteredTasks -self $self
+                    Rows = & $self.GetFilteredTasks -screen $self
                     OnRowSelect = {
                         param($Row, $Index)
                         # Toggle task status
@@ -325,7 +325,7 @@ function global:Get-TaskManagementScreen {
                                 $task.Status = "Active"
                                 $task.Completed = $null
                             }
-                            & $tableScreen.RefreshTaskTable -self $tableScreen
+                            & $tableScreen.RefreshTaskTable -screen $tableScreen
                         }
                     }
                 }
@@ -376,14 +376,14 @@ function global:Get-TaskManagementScreen {
                 X = 30; Y = 28; Width = 15; Height = 3
                 Text = "Save"
                 Visible = $false
-                OnClick = { & $formScreen.SaveTask -self $formScreen }
+                OnClick = { & $formScreen.SaveTask -screen $formScreen }
             }
             
             $self.Components.formCancelButton = New-TuiButton -Props @{
                 X = 50; Y = 28; Width = 15; Height = 3
                 Text = "Cancel"
                 Visible = $false
-                OnClick = { & $formScreen.HideForm -self $formScreen }
+                OnClick = { & $formScreen.HideForm -screen $formScreen }
             }
         }
         
@@ -512,7 +512,7 @@ function global:Get-TaskManagementScreen {
                 # Handle form navigation
                 switch ($Key.Key) {
                     ([ConsoleKey]::Escape) {
-                        & $self.HideForm -self $self
+                        & $self.HideForm -screen $self
                         return $true
                     }
                     ([ConsoleKey]::Tab) {
@@ -555,7 +555,7 @@ function global:Get-TaskManagementScreen {
                     return "Back"
                 }
                 ([ConsoleKey]::Spacebar) {
-                    & $self.ToggleTaskStatus -self $self
+                    & $self.ToggleTaskStatus -screen $self
                     return $true
                 }
             }
@@ -564,49 +564,49 @@ function global:Get-TaskManagementScreen {
             if ($Key.KeyChar) {
                 switch ($Key.KeyChar.ToString().ToUpper()) {
                     'N' {
-                        & $self.ShowAddTaskForm -self $self
+                        & $self.ShowAddTaskForm -screen $self
                         return $true
                     }
                     'E' {
                         $selectedRow = $self.Components.taskTable.SelectedRow
                         if ($selectedRow -ge 0 -and $selectedRow -lt $self.Components.taskTable.Rows.Count) {
                             $taskData = $self.Components.taskTable.Rows[$selectedRow]
-                            & $self.ShowEditTaskForm -self $self -taskId $taskData.Id
+                            & $self.ShowEditTaskForm -screen $self -taskId $taskData.Id
                         }
                         return $true
                     }
                     'D' {
-                        & $self.DeleteTask -self $self
+                        & $self.DeleteTask -screen $self
                         return $true
                     }
                     '1' {
                         $self.State.filter = "all"
-                        & $self.RefreshTaskTable -self $self
+                        & $self.RefreshTaskTable -screen $self
                         return $true
                     }
                     '2' {
                         $self.State.filter = "active"
-                        & $self.RefreshTaskTable -self $self
+                        & $self.RefreshTaskTable -screen $self
                         return $true
                     }
                     '3' {
                         $self.State.filter = "completed"
-                        & $self.RefreshTaskTable -self $self
+                        & $self.RefreshTaskTable -screen $self
                         return $true
                     }
                     'P' {
                         $self.State.sortBy = "priority"
-                        & $self.RefreshTaskTable -self $self
+                        & $self.RefreshTaskTable -screen $self
                         return $true
                     }
                     'U' {
                         $self.State.sortBy = "dueDate"
-                        & $self.RefreshTaskTable -self $self
+                        & $self.RefreshTaskTable -screen $self
                         return $true
                     }
                     'C' {
                         $self.State.sortBy = "created"
-                        & $self.RefreshTaskTable -self $self
+                        & $self.RefreshTaskTable -screen $self
                         return $true
                     }
                 }

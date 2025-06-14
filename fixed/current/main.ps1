@@ -255,9 +255,12 @@ function Start-PMCTerminal {
         
         if ($Data -and (Get-Command -Name "Save-UnifiedData" -ErrorAction SilentlyContinue)) {
             if (-not $Silent) {
-                Write-Host "Saving data..." -ForegroundColor Yellow
+                Write-Host "`nSaving data..." -ForegroundColor Yellow -NoNewline
             }
             Save-UnifiedData
+            if (-not $Silent) {
+                Write-Host " Done!" -ForegroundColor Green
+            }
         }
         
         if (-not $Silent) {

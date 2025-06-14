@@ -26,6 +26,101 @@ function global:Get-DashboardScreen {
         # Focus management
         FocusedComponentName = "quickActions"
         
+        # Define refresh method directly on the hashtable
+        RefreshData = {
+            param($screen)
+            
+            Write-Log -Level Debug -Message "RefreshData called"
+            
+            try {
+                # Refresh Active Timers
+                if ($global:Data -and $global:Data.ActiveTimers) {
+                    $timerData = @()
+                    foreach ($timerEntry in $global:Data.ActiveTimers.GetEnumerator()) {
+                        $timer = $timerEntry.Value
+                        if ($timer -and $timer.StartTime) {
+                            $elapsed = (Get-Date) - [DateTime]$timer.StartTime
+                            $project = if ($global:Data.Projects -and $timer.ProjectKey) { 
+                                $global:Data.Projects[$timer.ProjectKey].Name 
+                            } else { 
+                                "Unknown" 
+                            }
+                            
+                            $timerData += @{
+                                Project = $project
+                                Time = "{0:00}:{1:00}:{2:00}" -f [Math]::Floor($elapsed.TotalHours), $elapsed.Minutes, $elapsed.Seconds
+                            }
+                        }
+                    }
+                    if ($screen.Components.activeTimers) {
+                        $screen.Components.activeTimers.Data = $timerData
+                    }
+                    Write-Log -Level Debug -Message "Active timers updated: $($timerData.Count) timers"
+                }
+                
+                # Refresh Today's Tasks
+                if ($global:Data -and $global:Data.Tasks) {
+                    $today = (Get-Date).ToString("yyyy-MM-dd")
+                    $taskData = @()
+                    foreach ($task in $global:Data.Tasks) {
+                        if ($task -and -not $task.Completed -and ($task.DueDate -eq $today -or [string]::IsNullOrEmpty($task.DueDate))) {
+                            $project = if ($global:Data.Projects -and $task.ProjectKey) { 
+                                $global:Data.Projects[$task.ProjectKey].Name 
+                            } else { 
+                                "None" 
+                            }
+                            
+                            $taskData += @{
+                                Priority = $task.Priority ?? "Medium"
+                                Description = $task.Description
+                                Project = $project
+                            }
+                        }
+                    }
+                    if ($screen.Components.todaysTasks) {
+                        $screen.Components.todaysTasks.Data = $taskData | Sort-Object Priority, Description
+                    }
+                    Write-Log -Level Debug -Message "Today's tasks updated: $($taskData.Count) tasks"
+                }
+                
+                # Refresh Stats
+                $stats = @{ TodayHours = 0; WeekHours = 0; ActiveTasks = 0; RunningTimers = 0 }
+                
+                if ($global:Data) {
+                    $today = (Get-Date).ToString("yyyy-MM-dd")
+                    
+                    if ($global:Data.TimeEntries) {
+                        $todayEntries = @($global:Data.TimeEntries | Where-Object { $_ -and $_.Date -eq $today })
+                        $stats.TodayHours = [Math]::Round(($todayEntries | Measure-Object -Property Hours -Sum).Sum, 2)
+                        
+                        $weekStart = (Get-Date).AddDays(-[int](Get-Date).DayOfWeek).Date
+                        $weekEntries = @($global:Data.TimeEntries | Where-Object { 
+                            $_ -and $_.Date -and ([DateTime]::Parse($_.Date) -ge $weekStart)
+                        })
+                        $stats.WeekHours = [Math]::Round(($weekEntries | Measure-Object -Property Hours -Sum).Sum, 2)
+                    }
+                    
+                    if ($global:Data.Tasks) {
+                        $stats.ActiveTasks = @($global:Data.Tasks | Where-Object { $_ -and -not $_.Completed }).Count
+                    }
+                    
+                    if ($global:Data.ActiveTimers) {
+                        $stats.RunningTimers = $global:Data.ActiveTimers.Count
+                    }
+                }
+                
+                $screen.State.QuickStats = $stats
+                $screen.Components.todayHoursLabel.Text = "Today: $($stats.TodayHours)h"
+                $screen.Components.weekHoursLabel.Text = "Week: $($stats.WeekHours)h"
+                $screen.Components.activeTasksLabel.Text = "Tasks: $($stats.ActiveTasks)"
+                $screen.Components.runningTimersLabel.Text = "Timers: $($stats.RunningTimers)"
+                
+                Write-Log -Level Debug -Message "Stats updated: Today=$($stats.TodayHours)h, Week=$($stats.WeekHours)h, Tasks=$($stats.ActiveTasks), Timers=$($stats.RunningTimers)"
+            } catch {
+                Write-Log -Level Error -Message "RefreshData error: $_" -Data $_
+            }
+        }
+        
         # 3. Init: One-time setup
         Init = {
             param($self)
@@ -131,103 +226,8 @@ function global:Get-DashboardScreen {
                 
                 Write-Log -Level Debug -Message "Stats labels created"
                 
-                # Define refresh method (use .Add to ensure it's a method)
-                $self.Add('RefreshData', {
-                    param($screen)
-                    
-                    Write-Log -Level Debug -Message "RefreshData called"
-                    
-                    try {
-                        # Refresh Active Timers
-                        if ($global:Data -and $global:Data.ActiveTimers) {
-                            $timerData = @()
-                            foreach ($timerEntry in $global:Data.ActiveTimers.GetEnumerator()) {
-                                $timer = $timerEntry.Value
-                                if ($timer -and $timer.StartTime) {
-                                    $elapsed = (Get-Date) - [DateTime]$timer.StartTime
-                                    $project = if ($global:Data.Projects -and $timer.ProjectKey) { 
-                                        $global:Data.Projects[$timer.ProjectKey].Name 
-                                    } else { 
-                                        "Unknown" 
-                                    }
-                                    
-                                    $timerData += @{
-                                        Project = $project
-                                        Time = "{0:00}:{1:00}:{2:00}" -f [Math]::Floor($elapsed.TotalHours), $elapsed.Minutes, $elapsed.Seconds
-                                    }
-                                }
-                            }
-                            if ($screen.Components.activeTimers) {
-                                $screen.Components.activeTimers.Data = $timerData
-                            }
-                            Write-Log -Level Debug -Message "Active timers updated: $($timerData.Count) timers"
-                        }
-                        
-                        # Refresh Today's Tasks
-                        if ($global:Data -and $global:Data.Tasks) {
-                            $today = (Get-Date).ToString("yyyy-MM-dd")
-                            $taskData = @()
-                            foreach ($task in $global:Data.Tasks) {
-                                if ($task -and -not $task.Completed -and ($task.DueDate -eq $today -or [string]::IsNullOrEmpty($task.DueDate))) {
-                                    $project = if ($global:Data.Projects -and $task.ProjectKey) { 
-                                        $global:Data.Projects[$task.ProjectKey].Name 
-                                    } else { 
-                                        "None" 
-                                    }
-                                    
-                                    $taskData += @{
-                                        Priority = $task.Priority ?? "Medium"
-                                        Description = $task.Description
-                                        Project = $project
-                                    }
-                                }
-                            }
-                            if ($screen.Components.todaysTasks) {
-                                $screen.Components.todaysTasks.Data = $taskData | Sort-Object Priority, Description
-                            }
-                            Write-Log -Level Debug -Message "Today's tasks updated: $($taskData.Count) tasks"
-                        }
-                        
-                        # Refresh Stats
-                        $stats = @{ TodayHours = 0; WeekHours = 0; ActiveTasks = 0; RunningTimers = 0 }
-                        
-                        if ($global:Data) {
-                            $today = (Get-Date).ToString("yyyy-MM-dd")
-                            
-                            if ($global:Data.TimeEntries) {
-                                $todayEntries = @($global:Data.TimeEntries | Where-Object { $_ -and $_.Date -eq $today })
-                                $stats.TodayHours = [Math]::Round(($todayEntries | Measure-Object -Property Hours -Sum).Sum, 2)
-                                
-                                $weekStart = (Get-Date).AddDays(-[int](Get-Date).DayOfWeek).Date
-                                $weekEntries = @($global:Data.TimeEntries | Where-Object { 
-                                    $_ -and $_.Date -and ([DateTime]::Parse($_.Date) -ge $weekStart)
-                                })
-                                $stats.WeekHours = [Math]::Round(($weekEntries | Measure-Object -Property Hours -Sum).Sum, 2)
-                            }
-                            
-                            if ($global:Data.Tasks) {
-                                $stats.ActiveTasks = @($global:Data.Tasks | Where-Object { $_ -and -not $_.Completed }).Count
-                            }
-                            
-                            if ($global:Data.ActiveTimers) {
-                                $stats.RunningTimers = $global:Data.ActiveTimers.Count
-                            }
-                        }
-                        
-                        $screen.State.QuickStats = $stats
-                        $screen.Components.todayHoursLabel.Text = "Today: $($stats.TodayHours)h"
-                        $screen.Components.weekHoursLabel.Text = "Week: $($stats.WeekHours)h"
-                        $screen.Components.activeTasksLabel.Text = "Tasks: $($stats.ActiveTasks)"
-                        $screen.Components.runningTimersLabel.Text = "Timers: $($stats.RunningTimers)"
-                        
-                        Write-Log -Level Debug -Message "Stats updated: Today=$($stats.TodayHours)h, Week=$($stats.WeekHours)h, Tasks=$($stats.ActiveTasks), Timers=$($stats.RunningTimers)"
-                    } catch {
-                        Write-Log -Level Error -Message "RefreshData error: $_" -Data $_
-                    }
-                })
-                
-                # Initial refresh - call directly with parameter
-                $self.RefreshData($self)
+                # Initial refresh - call with the screen as parameter
+                & $self.RefreshData -screen $self
                 
             } catch {
                 Write-Log -Level Error -Message "Dashboard Init error: $_" -Data $_
@@ -241,7 +241,7 @@ function global:Get-DashboardScreen {
             try {
                 # Auto-refresh check
                 if (([DateTime]::Now - $self.State.LastRefresh).TotalSeconds -gt $self.State.AutoRefreshInterval) {
-                    $self.RefreshData($self)
+                    & $self.RefreshData -screen $self
                     $self.State.LastRefresh = [DateTime]::Now
                 }
                 
@@ -263,81 +263,14 @@ function global:Get-DashboardScreen {
                 Write-BufferBox -X 83 -Y 3 -Width 20 -Height 14 -Title " Stats " -BorderColor (Get-ThemeColor "Success")
                 Write-BufferBox -X 1 -Y 17 -Width 80 -Height 12 -Title " Today's Tasks " -BorderColor (Get-ThemeColor "Warning")
                 
-                # Render components or fallback content
-                if ($self.Components.quickActions) {
-                    # Render DataTable components
-                    foreach ($kvp in $self.Components.GetEnumerator()) {
-                        $component = $kvp.Value
-                        if ($component -and $component.Visible -ne $false) {
-                            # Set focus state based on screen's tracking
-                            $component.IsFocused = ($self.FocusedComponentName -eq $kvp.Key)
-                            if ($component.Render) {
-                                & $component.Render -self $component
-                            }
-                        }
-                    }
-                } else {
-                    # Fallback rendering for Quick Actions
-                    Write-BufferString -X 4 -Y 5 -Text "1. Add Time Entry" -ForegroundColor (Get-ThemeColor "Text")
-                    Write-BufferString -X 4 -Y 6 -Text "2. Start Timer" -ForegroundColor (Get-ThemeColor "Text")
-                    Write-BufferString -X 4 -Y 7 -Text "3. Manage Tasks" -ForegroundColor (Get-ThemeColor "Text")
-                    Write-BufferString -X 4 -Y 8 -Text "4. Manage Projects" -ForegroundColor (Get-ThemeColor "Text")
-                    Write-BufferString -X 4 -Y 9 -Text "5. View Reports" -ForegroundColor (Get-ThemeColor "Text")
-                    Write-BufferString -X 4 -Y 10 -Text "6. Settings" -ForegroundColor (Get-ThemeColor "Text")
-                    
-                    # Fallback for Active Timers
-                    if ($self.State.QuickStats.RunningTimers -eq 0) {
-                        Write-BufferString -X 42 -Y 8 -Text "No active timers" -ForegroundColor (Get-ThemeColor "Subtle")
-                    } else {
-                        $y = 5
-                        if ($global:Data -and $global:Data.ActiveTimers) {
-                            foreach ($timerEntry in $global:Data.ActiveTimers.GetEnumerator()) {
-                                if ($y -gt 14) { break }
-                                $timer = $timerEntry.Value
-                                if ($timer -and $timer.StartTime) {
-                                    $elapsed = (Get-Date) - [DateTime]$timer.StartTime
-                                    $project = if ($global:Data.Projects -and $timer.ProjectKey) { 
-                                        $global:Data.Projects[$timer.ProjectKey].Name 
-                                    } else { 
-                                        "Unknown" 
-                                    }
-                                    $timeStr = "{0:00}:{1:00}:{2:00}" -f [Math]::Floor($elapsed.TotalHours), $elapsed.Minutes, $elapsed.Seconds
-                                    Write-BufferString -X 42 -Y $y -Text "$project" -ForegroundColor (Get-ThemeColor "Text")
-                                    Write-BufferString -X 65 -Y $y -Text $timeStr -ForegroundColor (Get-ThemeColor "Accent")
-                                    $y++
-                                }
-                            }
-                        }
-                    }
-                    
-                    # Fallback for Today's Tasks
-                    if ($self.State.QuickStats.ActiveTasks -eq 0) {
-                        Write-BufferString -X 4 -Y 21 -Text "No tasks for today" -ForegroundColor (Get-ThemeColor "Subtle")
-                    } else {
-                        $y = 19
-                        $today = (Get-Date).ToString("yyyy-MM-dd")
-                        if ($global:Data -and $global:Data.Tasks) {
-                            foreach ($task in $global:Data.Tasks) {
-                                if ($y -gt 26) { break }
-                                if ($task -and -not $task.Completed -and ($task.DueDate -eq $today -or [string]::IsNullOrEmpty($task.DueDate))) {
-                                    $project = if ($global:Data.Projects -and $task.ProjectKey) { 
-                                        $global:Data.Projects[$task.ProjectKey].Name 
-                                    } else { 
-                                        "None" 
-                                    }
-                                    $taskLine = "[$($task.Priority ?? 'Medium')] $($task.Description) ($project)"
-                                    if ($taskLine.Length -gt 76) { $taskLine = $taskLine.Substring(0, 73) + "..." }
-                                    Write-BufferString -X 4 -Y $y -Text $taskLine -ForegroundColor (Get-ThemeColor "Text")
-                                    $y++
-                                }
-                            }
-                        }
-                    }
-                    
-                    # Always render stats labels
-                    foreach ($kvp in $self.Components.GetEnumerator()) {
-                        if ($kvp.Key -like "*Label" -and $kvp.Value.Render) {
-                            & $kvp.Value.Render -self $kvp.Value
+                # Render all components
+                foreach ($kvp in $self.Components.GetEnumerator()) {
+                    $component = $kvp.Value
+                    if ($component -and $component.Visible -ne $false) {
+                        # Set focus state based on screen's tracking
+                        $component.IsFocused = ($self.FocusedComponentName -eq $kvp.Key)
+                        if ($component.Render) {
+                            & $component.Render -self $component
                         }
                     }
                 }
@@ -371,7 +304,7 @@ function global:Get-DashboardScreen {
                     ([ConsoleKey]::R) {
                         # Manual refresh
                         Write-Log -Level Debug -Message "Manual refresh requested"
-                        $self.RefreshData($self)
+                        & $self.RefreshData -screen $self
                         Request-TuiRefresh
                         return $true
                     }
@@ -427,24 +360,7 @@ function global:Get-DashboardScreen {
                     return $true
                 }
                 
-                # Arrow key navigation for fallback mode (when DataTable components aren't available)
-                if (-not $self.Components.quickActions -or $self.Components.quickActions.Type -ne "DataTable") {
-                    # Simple fallback navigation
-                    switch ($Key.Key) {
-                        { $_ -in @([ConsoleKey]::UpArrow, [ConsoleKey]::DownArrow) } {
-                            # Simulate basic menu navigation
-                            Write-Log -Level Debug -Message "Arrow key navigation in fallback mode"
-                            Request-TuiRefresh
-                            return $true
-                        }
-                        ([ConsoleKey]::Enter) {
-                            # Enter key to activate menu items (same as number keys)
-                            Write-Log -Level Debug -Message "Enter key in fallback mode"
-                            # Could implement a selectedIndex tracking here
-                            return $true
-                        }
-                    }
-                }
+
                 
                 # Delegate to focused component
                 $focusedComponent = if ($self.FocusedComponentName) { $self.Components[$self.FocusedComponentName] } else { $null }
@@ -473,7 +389,7 @@ function global:Get-DashboardScreen {
             param($self)
             Write-Log -Level Debug -Message "Dashboard screen resuming"
             # Refresh data when returning to dashboard
-            $self.RefreshData($self)
+            & $self.RefreshData -screen $self
             
             # Restore focus to the first focusable component
             if (-not $self.FocusedComponentName -or -not $self.Components[$self.FocusedComponentName]) {
