@@ -30,9 +30,13 @@ function global:New-TuiDataTable {
         AllowSelection = $Props.AllowSelection ?? $true
         MultiSelect = $Props.MultiSelect ?? $false
         SelectedRows = @()
-        IsFocusable = $true
+        IsFocusable = $Props.IsFocusable ?? $true
         FilteredData = @()
         ProcessedData = @()
+        
+        # Event handlers from Props
+        OnRowSelect = $Props.OnRowSelect
+        OnSelectionChange = $Props.OnSelectionChange
         
         # Column configuration example:
         # @{
@@ -546,6 +550,9 @@ function global:New-TuiDataTable {
             & $this.ProcessData
             Request-TuiRefresh
         }
+        
+        # Initialize data processing
+        & $component.ProcessData
         
         SetFilter = {
             param($FilterText, $FilterColumn)

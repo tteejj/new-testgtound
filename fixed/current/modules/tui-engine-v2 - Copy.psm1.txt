@@ -90,10 +90,6 @@ function global:Initialize-TuiEngine {
     # Patch: Always set defaults if not passed in
     if (-not $Width) { $Width = [Console]::WindowWidth }
     if (-not $Height) { $Height = [Console]::WindowHeight - 1 }
-    
-    if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-        Write-Log -Level Info -Message "Initializing TUI Engine: ${Width}x${Height}"
-    }
 
    
 
@@ -122,28 +118,8 @@ function global:Initialize-TuiEngine {
         [Console]::Clear() # Clear console to remove initialization messages
         
         # Initialize subsystems with error handling
-        try { 
-            Initialize-LayoutEngines 
-            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                Write-Log -Level Debug -Message "Layout engines initialized"
-            }
-        } catch { 
-            Write-Warning "Layout engines init failed: $_" 
-            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                Write-Log -Level Error -Message "Layout engines init failed" -Data $_
-            }
-        }
-        try { 
-            Initialize-ComponentSystem 
-            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                Write-Log -Level Debug -Message "Component system initialized"
-            }
-        } catch { 
-            Write-Warning "Component system init failed: $_" 
-            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                Write-Log -Level Error -Message "Component system init failed" -Data $_
-            }
-        }
+        try { Initialize-LayoutEngines } catch { Write-Warning "Layout engines init failed: $_" }
+        try { Initialize-ComponentSystem } catch { Write-Warning "Component system init failed: $_" }
         
         # Track event handlers for cleanup (event system should already be initialized)
         $script:TuiState.EventHandlers = @{}
@@ -166,10 +142,6 @@ function global:Initialize-TuiEngine {
         
         # Export TuiState for global access
         $global:TuiState = $script:TuiState
-        
-        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-            Write-Log -Level Info -Message "TUI Engine initialized successfully"
-        }
     }
     catch {
         # --- ENHANCED DIAGNOSTIC BLOCK ---
@@ -264,10 +236,6 @@ function Process-TuiInput {
     $processedAny = $false
     # Check if the queue exists before trying to use it.
     if (-not $script:TuiState.InputQueue) { return $false }
-    
-    if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-        Write-Log -Level Verbose -Message "Processing input queue"
-    }
 
     $keyInfo = $null
     
@@ -405,10 +373,6 @@ function global:Start-TuiLoop {
 
 function Render-Frame {
     try {
-        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-            Write-Log -Level Verbose -Message "Starting frame render"
-        }
-        
         $bgColor = if (Get-Command -Name "Get-ThemeColor" -ErrorAction SilentlyContinue) {
             Get-ThemeColor "Background"
         } else {
@@ -423,12 +387,9 @@ function Render-Frame {
             try {
                 & $script:TuiState.CurrentScreen.Render -self $script:TuiState.CurrentScreen
             } catch {
-                $errorMessage = "Screen render error: $($_.Exception.Message)"
-                if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                    Write-Log -Level Error -Message $errorMessage -Data $_
-                }
+                Write-Warning "Screen render error: $_"
                 # Draw error message on screen
-                Write-BufferString -X 2 -Y 2 -Text $errorMessage -ForegroundColor Red
+                Write-BufferString -X 2 -Y 2 -Text "Screen render error: $_" -ForegroundColor Red
             }
         }
         
@@ -540,10 +501,6 @@ function global:Push-Screen {
     param([hashtable]$Screen)
     if (-not $Screen) { return }
     
-    if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-        Write-Log -Level Debug -Message "Pushing screen: $($Screen.Name)"
-    }
-    
     try {
         # Handle focus before switching screens
         if ($script:TuiState.FocusedComponent -and $script:TuiState.FocusedComponent.OnBlur) {
@@ -586,10 +543,6 @@ function global:Push-Screen {
 
 function global:Pop-Screen {
     if ($script:TuiState.ScreenStack.Count -eq 0) { return $false }
-    
-    if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-        Write-Log -Level Debug -Message "Popping screen"
-    }
     
     try {
         # Handle focus before switching screens
@@ -687,14 +640,6 @@ function global:Write-BufferString {
         # Pragmatic check for CJK/wide characters. A full implementation is library-dependent.
         if ($char -match '[\u1100-\u11FF\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFFEF]') {
             $currentX += 2
-            # Also fill the next cell with a space for wide characters to prevent overlap
-            if ($currentX -lt $script:TuiState.BufferWidth) {
-                $script:TuiState.BackBuffer[$Y, $currentX - 1] = @{ 
-                    Char = ' '
-                    FG = $ForegroundColor
-                    BG = $BackgroundColor 
-                }
-            }
         } else {
             $currentX++
         }

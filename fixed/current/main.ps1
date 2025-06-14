@@ -10,6 +10,7 @@ $script:BasePath = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # Module loading order is critical - dependencies must load first
 $script:ModulesToLoad = @(
+    @{ Name = "logger"; Path = "modules\logger.psm1"; Required = $true },
     @{ Name = "event-system"; Path = "modules\event-system.psm1"; Required = $true },
     @{ Name = "data-manager"; Path = "modules\data-manager.psm1"; Required = $true },
     @{ Name = "theme-manager"; Path = "modules\theme-manager.psm1"; Required = $true },
@@ -24,14 +25,15 @@ $script:ModulesToLoad = @(
 # Screen modules will be loaded dynamically
 $script:ScreenModules = @(
     "dashboard-screen-grid",
-#    "dashboard-screen",
     "time-entry-screen",
+    "timer-start-screen",
     "task-screen",
     "project-management-screen",
     "timer-management-screen",
     "reports-screen",
     "settings-screen",
-    "demo-screen"  # New demo screen for showcasing components
+    "debug-log-screen",
+    "demo-screen"
 )
 
 function Initialize-PMCModules {
@@ -134,6 +136,13 @@ function Start-PMCTerminal {
             Write-Host "`nInitializing subsystems..." -ForegroundColor Cyan
         }
         
+        # Initialize logger first to capture all subsequent events
+        if (Get-Command Initialize-Logger -ErrorAction SilentlyContinue) {
+            Initialize-Logger
+            Write-Log -Level Info -Message "PMC Terminal startup initiated"
+            Write-Log -Level Info -Message "Loaded modules: $($loadedModules -join ', ')"
+        }
+        
         # Initialize core systems in correct order
         # Event system MUST be first as other systems depend on it
         Initialize-EventSystem
@@ -216,9 +225,15 @@ function Start-PMCTerminal {
         Start-TuiLoop
         
     } catch {
+        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+            Write-Log -Level Error -Message "FATAL: Failed to initialize PMC Terminal" -Data $_
+        }
         Write-Error "FATAL: Failed to initialize PMC Terminal: $_"
         throw
     } finally {
+        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+            Write-Log -Level Info -Message "PMC Terminal shutting down"
+        }
         # Cleanup
         if (Get-Command -Name "Stop-TuiEngine" -ErrorAction SilentlyContinue) {
             if (-not $Silent) {
@@ -236,6 +251,10 @@ function Start-PMCTerminal {
         
         if (-not $Silent) {
             Write-Host "Goodbye!" -ForegroundColor Green
+        }
+        
+        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+            Write-Log -Level Info -Message "PMC Terminal shutdown complete"
         }
     }
 }

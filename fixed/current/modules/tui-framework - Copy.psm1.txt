@@ -3,48 +3,6 @@
 
 $script:TuiAsyncJobs = @()
 
-function global:Invoke-TuiMethod {
-    <#
-    .SYNOPSIS
-    Safely invokes a method on a TUI component.
-    #>
-    param(
-        [Parameter(Mandatory=$true)]
-        [hashtable]$Component,
-
-        [Parameter(Mandatory=$true)]
-        [string]$MethodName,
-
-        [Parameter()]
-        [hashtable]$Arguments = @{}
-    )
-
-    if ($null -eq $Component) { return }
-    if (-not $Component.ContainsKey($MethodName)) { return }
-
-    $method = $Component[$MethodName]
-    if ($null -eq $method -or $method -isnot [scriptblock]) {
-        # The method doesn't exist or is not a scriptblock, so we can't call it.
-        # This prevents the "term is not recognized" error.
-        return
-    }
-
-    # Add the component itself as the 'self' parameter for convenience
-    $Arguments['self'] = $Component
-
-    try {
-        # Use splatting with the @ operator for robust parameter passing
-        return & $method @Arguments
-    
-        } catch {
-        $errorMessage = "Error invoking method '$MethodName' on component '$($Component.Type)': $($_.Exception.Message)"
-        Write-Log -Level Error -Message $errorMessage -Data $_
-        Request-TuiRefresh
-    }
-}
-
-# Add 'Invoke-TuiMethod' to the Export-ModuleMember list at the end of the file.
-
 function global:Initialize-TuiFramework {
     <#
     .SYNOPSIS
@@ -579,6 +537,5 @@ Export-ModuleMember -Function @(
     'Stop-AllTuiAsyncJobs',
     'Create-TuiState',
     'Compare-TuiValue',
-    'Remove-TuiComponent',
-    'Invoke-TuiMethod'
+    'Remove-TuiComponent'
 )

@@ -25,8 +25,8 @@ function global:New-TuiLabel {
             param($self)
             if (-not $self.Visible) { return }
             
-            $fg = if ($self.ForegroundColor) { $self.ForegroundColor } else { Get-ThemeColor "Primary" }
-            Write-BufferString -X $self.X -Y $self.Y -Text $self.Text -ForegroundColor $fg
+            Write-BufferString -X $self.X -Y $self.Y -Text $self.Text `
+                -ForegroundColor (if ($self.ForegroundColor) { $self.ForegroundColor } else { Get-ThemeColor "Primary" })
         }
         
         HandleInput = {
@@ -741,15 +741,8 @@ function global:New-TuiDatePicker {
             $borderColor = if ($self.IsFocused) { Get-ThemeColor "Accent" } else { Get-ThemeColor "Secondary" }
             Write-BufferBox -X $self.X -Y $self.Y -Width $self.Width -Height 3 -BorderColor $borderColor
             $dateStr = $self.Value.ToString($self.Format)
-            
-            # Truncate date string if too long
-            $maxLength = $self.Width - 6
-            if ($dateStr.Length -gt $maxLength) {
-                $dateStr = $dateStr.Substring(0, $maxLength)
-            }
-            
             Write-BufferString -X ($self.X + 2) -Y ($self.Y + 1) -Text $dateStr
-            if ($self.IsFocused -and $self.Width -ge 6) { 
+            if ($self.IsFocused) { 
                 Write-BufferString -X ($self.X + $self.Width - 4) -Y ($self.Y + 1) -Text "📅" -ForegroundColor $borderColor 
             }
         }
@@ -826,14 +819,8 @@ function global:New-TuiTimePicker {
                 $timeStr = "{0:D2}:{1:D2} {2}" -f $displayHour, $self.Minute, $ampm
             }
             
-            # Truncate time string if too long
-            $maxLength = $self.Width - 6
-            if ($timeStr.Length -gt $maxLength) {
-                $timeStr = $timeStr.Substring(0, $maxLength)
-            }
-            
             Write-BufferString -X ($self.X + 2) -Y ($self.Y + 1) -Text $timeStr
-            if ($self.IsFocused -and $self.Width -ge 6) { 
+            if ($self.IsFocused) { 
                 Write-BufferString -X ($self.X + $self.Width - 4) -Y ($self.Y + 1) -Text "⏰" -ForegroundColor $borderColor 
             }
         }

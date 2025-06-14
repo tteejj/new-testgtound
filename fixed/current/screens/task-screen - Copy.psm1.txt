@@ -74,7 +74,7 @@ function global:Get-TaskManagementScreen {
                         @{ Name = "Category"; Header = "Category"; Width = 11 }
                         @{ Name = "DueDate"; Header = "Due Date"; Width = 10 }
                     )
-                    Data = & $self.GetFilteredTasks
+                    Data = $self.GetFilteredTasks()
                     AllowSort = $false  # We handle sorting ourselves
                     AllowFilter = $false
                     MultiSelect = $false
@@ -105,7 +105,7 @@ function global:Get-TaskManagementScreen {
                         @{ Name = "Category"; Header = "Category" }
                         @{ Name = "DueDate"; Header = "Due Date" }
                     )
-                    Rows = & $self.GetFilteredTasks
+                    Rows = $self.GetFilteredTasks()
                     OnRowSelect = {
                         param($Row, $Index)
                         # Toggle task status
@@ -223,7 +223,7 @@ function global:Get-TaskManagementScreen {
             }
             
             $self.RefreshTaskTable = {
-                $tableData = & $self.GetFilteredTasks
+                $tableData = $self.GetFilteredTasks()
                 if ($self.Components.taskTable.Data) {
                     $self.Components.taskTable.Data = $tableData
                 } else {
@@ -384,22 +384,22 @@ function global:Get-TaskManagementScreen {
             
             # Filter/Sort toolbar
             $toolbarY = 3
-            Write-BufferString -X 2 -Y $toolbarY -Text "Filter: " -ForegroundColor ([ConsoleColor]::Gray)
+            Write-BufferString -X 2 -Y $toolbarY -Text "Filter: " -ForegroundColor Gray
             $filterOptions = @("All", "Active", "Completed")
             $filterX = 10
             foreach ($option in $filterOptions) {
                 $isSelected = ($option.ToLower() -eq $self.State.filter)
-                $color = if ($isSelected) { [ConsoleColor]::Yellow } else { [ConsoleColor]::White }
+                $color = if ($isSelected) { Yellow } else { White }
                 Write-BufferString -X $filterX -Y $toolbarY -Text "[$option]" -ForegroundColor $color
                 $filterX += $option.Length + 4
             }
             
-            Write-BufferString -X 40 -Y $toolbarY -Text "Sort: " -ForegroundColor ([ConsoleColor]::Gray)
+            Write-BufferString -X 40 -Y $toolbarY -Text "Sort: " -ForegroundColor Gray
             $sortOptions = @(@{Display="Priority"; Value="priority"}, @{Display="Due Date"; Value="dueDate"}, @{Display="Created"; Value="created"})
             $sortX = 46
             foreach ($option in $sortOptions) {
                 $isSelected = ($option.Value -eq $self.State.sortBy)
-                $color = if ($isSelected) { [ConsoleColor]::Yellow } else { [ConsoleColor]::White }
+                $color = if ($isSelected) { Yellow } else { White }
                 Write-BufferString -X $sortX -Y $toolbarY -Text "[$($option.Display)]" -ForegroundColor $color
                 $sortX += $option.Display.Length + 4
             }
@@ -414,19 +414,19 @@ function global:Get-TaskManagementScreen {
                 # Form background
                 for ($y = $formY; $y -lt ($formY + $formHeight); $y++) {
                     for ($x = $formX; $x -lt ($formX + $formWidth); $x++) {
-                        Write-BufferString -X $x -Y $y -Text " " -BackgroundColor ([ConsoleColor]::DarkGray)
+                        Write-BufferString -X $x -Y $y -Text " " -BackgroundColor DarkGray
                     }
                 }
                 
                 $title = if ($self.State.editingTaskId) { "Edit Task" } else { "New Task" }
-                Write-BufferBox -X $formX -Y $formY -Width $formWidth -Height $formHeight -Title " $title " -BorderColor ([ConsoleColor]::Yellow)
+                Write-BufferBox -X $formX -Y $formY -Width $formWidth -Height $formHeight -Title " $title " -BorderColor Yellow
                 
                 # Form labels
-                Write-BufferString -X ($formX + 3) -Y ($formY + 2) -Text "Title:" -ForegroundColor ([ConsoleColor]::White)
-                Write-BufferString -X ($formX + 3) -Y ($formY + 6) -Text "Description:" -ForegroundColor ([ConsoleColor]::White)
-                Write-BufferString -X ($formX + 3) -Y ($formY + 12) -Text "Category:" -ForegroundColor ([ConsoleColor]::White)
-                Write-BufferString -X ($formX + 28) -Y ($formY + 12) -Text "Priority:" -ForegroundColor ([ConsoleColor]::White)
-                Write-BufferString -X ($formX + 3) -Y ($formY + 16) -Text "Due Date:" -ForegroundColor ([ConsoleColor]::White)
+                Write-BufferString -X ($formX + 3) -Y ($formY + 2) -Text "Title:" -ForegroundColor White
+                Write-BufferString -X ($formX + 3) -Y ($formY + 6) -Text "Description:" -ForegroundColor White
+                Write-BufferString -X ($formX + 3) -Y ($formY + 12) -Text "Category:" -ForegroundColor White
+                Write-BufferString -X ($formX + 28) -Y ($formY + 12) -Text "Priority:" -ForegroundColor White
+                Write-BufferString -X ($formX + 3) -Y ($formY + 16) -Text "Due Date:" -ForegroundColor White
             }
             
             # Help panel
@@ -439,11 +439,11 @@ function global:Get-TaskManagementScreen {
                 # Help background
                 for ($y = $helpY; $y -lt ($helpY + $helpHeight); $y++) {
                     for ($x = $helpX; $x -lt ($helpX + $helpWidth); $x++) {
-                        Write-BufferString -X $x -Y $y -Text " " -BackgroundColor ([ConsoleColor]::DarkBlue)
+                        Write-BufferString -X $x -Y $y -Text " " -BackgroundColor DarkBlue
                     }
                 }
                 
-                Write-BufferBox -X $helpX -Y $helpY -Width $helpWidth -Height $helpHeight -Title " Help " -BorderColor ([ConsoleColor]::Yellow)
+                Write-BufferBox -X $helpX -Y $helpY -Width $helpWidth -Height $helpHeight -Title " Help " -BorderColor Yellow
                 
                 $commands = @(
                     @{ Key = "↑/↓"; Description = "Navigate tasks" }
@@ -461,21 +461,17 @@ function global:Get-TaskManagementScreen {
                 
                 $cmdY = $helpY + 2
                 foreach ($cmd in $commands) {
-                    Write-BufferString -X ($helpX + 2) -Y $cmdY -Text $cmd.Key -ForegroundColor ([ConsoleColor]::Yellow)
-                    Write-BufferString -X ($helpX + 10) -Y $cmdY -Text $cmd.Description -ForegroundColor ([ConsoleColor]::White)
+                    Write-BufferString -X ($helpX + 2) -Y $cmdY -Text $cmd.Key -ForegroundColor Yellow
+                    Write-BufferString -X ($helpX + 10) -Y $cmdY -Text $cmd.Description -ForegroundColor White
                     $cmdY++
                 }
             }
             
             # Render all components
-            foreach ($kvp in $self.Components.GetEnumerator()) {
-                $component = $kvp.Value
-                if ($component -and $component.Visible -ne $false) {
-                    # Set focus state
-                    $component.IsFocused = ($self.FocusedComponentName -eq $kvp.Key)
-                    if ($component.Render) {
-                        & $component.Render -self $component
-                    }
+            foreach ($component in $self.Components.Values) {
+                if ($component.Visible -ne $false) {
+                    $component.IsFocused = ($self.FocusedComponentName -eq ($self.Components.GetEnumerator() | Where-Object { $_.Value -eq $component } | Select-Object -First 1).Key)
+                    & $component.Render -self $component
                 }
             }
             
@@ -488,7 +484,7 @@ function global:Get-TaskManagementScreen {
             } else {
                 "↑↓: Navigate • Space: Toggle • N: New • E: Edit • D: Delete • H: Help • Q: Back"
             }
-            Write-BufferString -X 2 -Y $statusY -Text $statusText -ForegroundColor ([ConsoleColor]::Gray)
+            Write-BufferString -X 2 -Y $statusY -Text $statusText -ForegroundColor Gray
         }
         
         # 5. HandleInput: Global input handling for the screen
