@@ -99,20 +99,26 @@ function global:Get-TaskManagementScreen {
             $screen.Components.formPanel.Height = $formHeight
             $screen.Components.formPanel.Title = " New Task "
             
-            # Recalculate layout after positioning
-            & $screen.Components.formPanel._RecalculateLayout -self $screen.Components.formPanel
+            # Show all form components FIRST (before panel layout recalc)
+            $formComponents = @('formTitleLabel', 'formTitle', 'formDescLabel', 'formDescription', 
+                               'formCategoryLabel', 'formCategory', 'formPriorityLabel', 'formPriority',
+                               'formDueDateLabel', 'formDueDate', 'formSaveButton', 'formCancelButton')
+            foreach ($comp in $formComponents) {
+                if ($screen.Components[$comp]) {
+                    $screen.Components[$comp].Visible = $true
+                }
+            }
             
-            # Show form panel
+            # Also make all children of the panel visible directly
+            foreach ($child in $screen.Components.formPanel.Children) {
+                $child.Visible = $true
+            }
+            
+            # Show form panel itself
             $screen.Components.formPanel.Visible = $true
             
-            # Enable focus on form components
-            $screen.Components.formTitle.IsFocusable = $true
-            $screen.Components.formDescription.IsFocusable = $true
-            $screen.Components.formCategory.IsFocusable = $true
-            $screen.Components.formPriority.IsFocusable = $true
-            $screen.Components.formDueDate.IsFocusable = $true
-            $screen.Components.formSaveButton.IsFocusable = $true
-            $screen.Components.formCancelButton.IsFocusable = $true
+            # Recalculate layout after positioning and visibility changes
+            & $screen.Components.formPanel._RecalculateLayout -self $screen.Components.formPanel
             
             # Hide table
             if ($screen.Components.taskTable) {
@@ -157,20 +163,26 @@ function global:Get-TaskManagementScreen {
             $screen.Components.formPanel.Height = $formHeight
             $screen.Components.formPanel.Title = " Edit Task "
             
-            # Recalculate layout after positioning
-            & $screen.Components.formPanel._RecalculateLayout -self $screen.Components.formPanel
+            # Show all form components FIRST (before panel layout recalc)
+            $formComponents = @('formTitleLabel', 'formTitle', 'formDescLabel', 'formDescription', 
+                               'formCategoryLabel', 'formCategory', 'formPriorityLabel', 'formPriority',
+                               'formDueDateLabel', 'formDueDate', 'formSaveButton', 'formCancelButton')
+            foreach ($comp in $formComponents) {
+                if ($screen.Components[$comp]) {
+                    $screen.Components[$comp].Visible = $true
+                }
+            }
             
-            # Show form panel
+            # Also make all children of the panel visible directly
+            foreach ($child in $screen.Components.formPanel.Children) {
+                $child.Visible = $true
+            }
+            
+            # Show form panel itself
             $screen.Components.formPanel.Visible = $true
             
-            # Enable focus on form components
-            $screen.Components.formTitle.IsFocusable = $true
-            $screen.Components.formDescription.IsFocusable = $true
-            $screen.Components.formCategory.IsFocusable = $true
-            $screen.Components.formPriority.IsFocusable = $true
-            $screen.Components.formDueDate.IsFocusable = $true
-            $screen.Components.formSaveButton.IsFocusable = $true
-            $screen.Components.formCancelButton.IsFocusable = $true
+            # Recalculate layout after positioning and visibility changes
+            & $screen.Components.formPanel._RecalculateLayout -self $screen.Components.formPanel
             
             # Hide table
             if ($screen.Components.taskTable) {
@@ -237,31 +249,40 @@ function global:Get-TaskManagementScreen {
             param($screen)
             $screen.State.showingForm = $false
             
-            # Hide form panel
+            # Clear engine focus before hiding
+            if (Get-Command Clear-ComponentFocus -ErrorAction SilentlyContinue) {
+                Clear-ComponentFocus
+            }
+            
+            # Hide form panel and all its children
             $screen.Components.formPanel.Visible = $false
             
-            # Disable focus on form components
-            $screen.Components.formTitle.IsFocusable = $false
-            $screen.Components.formTitle.IsFocused = $false
-            $screen.Components.formDescription.IsFocusable = $false
-            $screen.Components.formDescription.IsFocused = $false
-            $screen.Components.formCategory.IsFocusable = $false
-            $screen.Components.formCategory.IsFocused = $false
-            $screen.Components.formPriority.IsFocusable = $false
-            $screen.Components.formPriority.IsFocused = $false
-            $screen.Components.formDueDate.IsFocusable = $false
-            $screen.Components.formDueDate.IsFocused = $false
-            $screen.Components.formSaveButton.IsFocusable = $false
-            $screen.Components.formSaveButton.IsFocused = $false
-            $screen.Components.formCancelButton.IsFocusable = $false
-            $screen.Components.formCancelButton.IsFocused = $false
+            # Hide all form components
+            $formComponents = @('formTitleLabel', 'formTitle', 'formDescLabel', 'formDescription', 
+                               'formCategoryLabel', 'formCategory', 'formPriorityLabel', 'formPriority',
+                               'formDueDateLabel', 'formDueDate', 'formSaveButton', 'formCancelButton')
+            foreach ($comp in $formComponents) {
+                if ($screen.Components[$comp]) {
+                    $screen.Components[$comp].Visible = $false
+                    $screen.Components[$comp].IsFocused = $false
+                }
+            }
             
             # Show table
             if ($screen.Components.taskTable) {
                 $screen.Components.taskTable.Visible = $true
                 $screen.Components.taskTable.IsFocusable = $true
+                $screen.Components.taskTable.IsFocused = $true
             }
             $screen.FocusedComponentName = 'taskTable'
+            
+            # Set engine focus to table
+            if ($screen.Components.taskTable -and (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue)) {
+                Set-ComponentFocus -Component $screen.Components.taskTable
+            }
+            
+            # Force full screen refresh to clear form overlay
+            $global:TuiState.RenderStats.FrameCount = 0
             Request-TuiRefresh
         }
         
@@ -397,50 +418,57 @@ function global:Get-TaskManagementScreen {
                 Visible = $false
             }
             
-            # Create form components directly
+            # Create form components directly - all start hidden
             $titleLabel = New-TuiLabel -Props @{ 
                 Text = "Title:"
                 Width = 50
                 Height = 1
+                Visible = $false
             }
             
             $self.Components.formTitle = New-TuiTextBox -Props @{
                 Width = 54
                 Height = 3
                 Placeholder = "Enter task title..."
-                IsFocusable = $false
+                IsFocusable = $true  # Changed to true
+                Visible = $false
             }
             
             $descLabel = New-TuiLabel -Props @{ 
                 Text = "Description:"
                 Width = 50
                 Height = 1
+                Visible = $false
             }
             
             $self.Components.formDescription = New-TuiTextArea -Props @{
                 Width = 54
                 Height = 5
                 Placeholder = "Enter task description..."
-                IsFocusable = $false
+                IsFocusable = $true  # Changed to true
+                Visible = $false
             }
             
             $categoryLabel = New-TuiLabel -Props @{ 
                 Text = "Category:"
                 Width = 20
                 Height = 1
+                Visible = $false
             }
             
             $self.Components.formCategory = New-TuiDropdown -Props @{
                 Width = 20
                 Height = 3
                 Options = $self.State.categories | ForEach-Object { @{ Display = $_; Value = $_ } }
-                IsFocusable = $false
+                IsFocusable = $true  # Changed to true
+                Visible = $false
             }
             
             $priorityLabel = New-TuiLabel -Props @{ 
                 Text = "Priority:"
                 Width = 20
                 Height = 1
+                Visible = $false
             }
             
             $self.Components.formPriority = New-TuiDropdown -Props @{
@@ -452,26 +480,30 @@ function global:Get-TaskManagementScreen {
                     @{ Display = "Medium"; Value = "Medium" }
                     @{ Display = "Low"; Value = "Low" }
                 )
-                IsFocusable = $false
+                IsFocusable = $true  # Changed to true
+                Visible = $false
             }
             
             $dueDateLabel = New-TuiLabel -Props @{ 
                 Text = "Due Date:"
                 Width = 50
                 Height = 1
+                Visible = $false
             }
             
             $self.Components.formDueDate = New-TuiDatePicker -Props @{
                 Width = 20
                 Height = 3
-                IsFocusable = $false
+                IsFocusable = $true  # Changed to true
+                Visible = $false
             }
             
             $self.Components.formSaveButton = New-TuiButton -Props @{
                 Width = 15
                 Height = 3
                 Text = "Save"
-                IsFocusable = $false
+                IsFocusable = $true  # Changed to true
+                Visible = $false
                 OnClick = { & $formScreen.SaveTask -screen $formScreen }
             }
             
@@ -479,9 +511,17 @@ function global:Get-TaskManagementScreen {
                 Width = 15
                 Height = 3
                 Text = "Cancel"
-                IsFocusable = $false
+                IsFocusable = $true  # Changed to true
+                Visible = $false
                 OnClick = { & $formScreen.HideForm -screen $formScreen }
             }
+            
+            # Store label references for visibility management
+            $self.Components.formTitleLabel = $titleLabel
+            $self.Components.formDescLabel = $descLabel
+            $self.Components.formCategoryLabel = $categoryLabel
+            $self.Components.formPriorityLabel = $priorityLabel
+            $self.Components.formDueDateLabel = $dueDateLabel
             
             # Add all components directly to form panel
             & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $titleLabel
@@ -570,6 +610,15 @@ function global:Get-TaskManagementScreen {
             foreach ($kvp in $self.Components.GetEnumerator()) {
                 $component = $kvp.Value
                 if ($component -and $component.Visible -ne $false) {
+                    # Skip individual form components when form is not showing
+                    # BUT always render the formPanel itself if it's visible
+                    if ($kvp.Key -ne 'formPanel') {
+                        $isFormComponent = $kvp.Key -match '^form'
+                        if ($isFormComponent -and -not $self.State.showingForm) {
+                            continue
+                        }
+                    }
+                    
                     # Set focus state
                     $component.IsFocused = ($self.FocusedComponentName -eq $kvp.Key)
                     if ($component.Render) {
@@ -581,11 +630,11 @@ function global:Get-TaskManagementScreen {
             # Status bar
             $statusY = $global:TuiState.BufferHeight - 2
             $statusText = if ($self.State.showingForm) {
-                "Tab: Next Field • Enter: Save • Esc: Cancel"
+                "Tab: Next Field | Enter: Save | Esc: Cancel"
             } elseif ($self.State.showHelp) {
                 "Esc/H: Close Help"
             } else {
-                "↑↓: Navigate • Space: Toggle • N: New • E: Edit • D: Delete • H: Help • Q: Back"
+                "↑↓: Navigate | Space: Toggle | N: New | E: Edit | D: Delete | H: Help | Q: Back"
             }
             Write-BufferString -X 2 -Y $statusY -Text $statusText -ForegroundColor ([ConsoleColor]::Gray)
         }
@@ -604,7 +653,11 @@ function global:Get-TaskManagementScreen {
                     ([ConsoleKey]::Tab) {
                         # Cycle through form fields
                         $formFields = @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')
-                        $visibleFields = $formFields | Where-Object { $self.Components[$_] -and $self.Components[$_].Visible }
+                        $visibleFields = $formFields | Where-Object { 
+                            $self.Components[$_] -and 
+                            $self.Components[$_].Visible -ne $false -and 
+                            $self.Components[$_].IsFocusable -ne $false 
+                        }
                         
                         if ($visibleFields.Count -gt 0) {
                             $currentIndex = [array]::IndexOf($visibleFields, $self.FocusedComponentName)
@@ -618,19 +671,27 @@ function global:Get-TaskManagementScreen {
                                 $nextIndex = ($currentIndex + 1) % $visibleFields.Count
                             }
                             
-                            $self.FocusedComponentName = $visibleFields[$nextIndex]
-                            
-                            # Update component focus states
-                            foreach ($field in $formFields) {
-                                if ($self.Components[$field]) {
-                                    $self.Components[$field].IsFocused = ($field -eq $self.FocusedComponentName)
-                                }
+                            # Clear focus from current component
+                            if ($self.Components[$self.FocusedComponentName]) {
+                                $self.Components[$self.FocusedComponentName].IsFocused = $false
                             }
                             
-                            # Update engine's focus tracking
+                            # Set new focused component
+                            $self.FocusedComponentName = $visibleFields[$nextIndex]
                             $focusedComponent = $self.Components[$self.FocusedComponentName]
-                            if ($focusedComponent -and (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue)) {
-                                Set-ComponentFocus -Component $focusedComponent
+                            
+                            if ($focusedComponent) {
+                                $focusedComponent.IsFocused = $true
+                                
+                                # Update engine's focus tracking
+                                if (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue) {
+                                    Set-ComponentFocus -Component $focusedComponent
+                                }
+                                
+                                # Special handling for TextArea to ensure it gets focus
+                                if ($focusedComponent.Type -eq 'TextArea') {
+                                    Write-Log -Level Debug -Message "Setting focus to TextArea component"
+                                }
                             }
                         }
                         

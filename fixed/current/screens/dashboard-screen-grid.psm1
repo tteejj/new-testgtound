@@ -380,7 +380,7 @@ function global:Get-DashboardScreen {
                 # Status bar
                 $subtleColor = Get-ThemeColor "Subtle" -Default ([ConsoleColor]::DarkGray)
                 $statusY = $global:TuiState.BufferHeight - 2
-                Write-BufferString -X 2 -Y $statusY -Text "Tab: Switch Focus • Enter: Select • R: Refresh • Q: Quit • F12: Debug Log" -ForegroundColor $subtleColor
+                Write-BufferString -X 2 -Y $statusY -Text "Tab: Switch Focus | Enter: Select | R: Refresh | Q: Quit | F12: Debug Log" -ForegroundColor $subtleColor
                 
             } catch {
                 Write-Log -Level Error -Message "Dashboard Render error: $_" -Data $_
@@ -468,8 +468,6 @@ function global:Get-DashboardScreen {
                     }
                     return $true
                 }
-                
-
                 
                 # Delegate to focused component
                 $focusedComponent = if ($self.FocusedComponentName) { $self.Components[$self.FocusedComponentName] } else { $null }

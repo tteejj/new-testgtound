@@ -1195,6 +1195,10 @@ function global:New-TuiPanel {
         _RecalculateLayout = {
             param($self)
             
+            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                Write-Log -Level Debug -Message "Panel _RecalculateLayout: X=$($self.X), Y=$($self.Y), Width=$($self.Width), Height=$($self.Height)"
+            }
+            
             # Calculate content area
             $contentX = $self.X + $self.Padding
             $contentY = $self.Y + $self.Padding
@@ -1208,6 +1212,10 @@ function global:New-TuiPanel {
                 $contentHeight -= 2
             }
             
+            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                Write-Log -Level Debug -Message "  Content area: X=$contentX, Y=$contentY, Width=$contentWidth, Height=$contentHeight"
+            }
+            
             # Apply layout
             switch ($self.Layout) {
                 'Stack' {
@@ -1215,10 +1223,19 @@ function global:New-TuiPanel {
                     $currentY = $contentY
                     
                     foreach ($child in $self.Children) {
-                        if (-not $child.Visible) { continue }
+                        if (-not $child.Visible) { 
+                            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                                Write-Log -Level Debug -Message "    Skipping invisible child: Type=$($child.Type)"
+                            }
+                            continue 
+                        }
                         
                         $child.X = $currentX
                         $child.Y = $currentY
+                        
+                        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                            Write-Log -Level Debug -Message "    Positioned child: Type=$($child.Type), X=$($child.X), Y=$($child.Y), Width=$($child.Width), Height=$($child.Height)"
+                        }
                         
                         # Constrain child size to panel
                         if ($self.Orientation -eq 'Vertical') {
@@ -1266,10 +1283,11 @@ function global:New-TuiPanel {
         
         Render = {
             param($self)
+            # CRITICAL: Don't render anything if panel is not visible
             if (-not $self.Visible) { return }
             
             if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                Write-Log -Level Debug -Message "Panel Render: Type=$($self.Type), X=$($self.X), Y=$($self.Y), Width=$($self.Width), Height=$($self.Height), Children=$($self.Children.Count)"
+                Write-Log -Level Debug -Message "Panel Render: Type=$($self.Type), X=$($self.X), Y=$($self.Y), Width=$($self.Width), Height=$($self.Height), Children=$($self.Children.Count), Visible=$($self.Visible)"
             }
             
             # Draw border if requested
@@ -1284,13 +1302,36 @@ function global:New-TuiPanel {
                     -BorderColor $borderColor -Title $self.Title
             }
             
-            # Render children
-            foreach ($child in $self.Children) {
-                if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                    Write-Log -Level Debug -Message "  Child: Type=$($child.Type), X=$($child.X), Y=$($child.Y), Visible=$($child.Visible)"
+            # Render children if panel is visible
+            if ($self.Visible) {
+                $renderedCount = 0
+                foreach ($child in $self.Children) {
+                    if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                        Write-Log -Level Debug -Message "  Child[$renderedCount]: Type=$($child.Type), X=$($child.X), Y=$($child.Y), Visible=$($child.Visible), HasRender=$($null -ne $child.Render)"
+                    }
+                    
+                    # Force visibility check and render
+                    if ($child.Visible -eq $true -and $child.Render) {
+                        try {
+                            & $child.Render -self $child
+                            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                                Write-Log -Level Debug -Message "    Successfully rendered child[$renderedCount]"
+                            }
+                        } catch {
+                            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                                Write-Log -Level Error -Message "    Error rendering child[$renderedCount]: $_"
+                            }
+                        }
+                    } else {
+                        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                            Write-Log -Level Debug -Message "    Skipped child[$renderedCount] - Visible=$($child.Visible), HasRender=$($null -ne $child.Render)"
+                        }
+                    }
+                    $renderedCount++
                 }
-                if ($child.Visible -ne $false -and $child.Render) {
-                    & $child.Render -self $child
+                
+                if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                    Write-Log -Level Debug -Message "Panel rendered $renderedCount children total"
                 }
             }
         }

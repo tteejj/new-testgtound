@@ -55,3 +55,38 @@
 - Increased form panel height from 24 to 30 for all components
 - Added all labels and inputs directly as children
 - Result: Form should now display all components properly
+
+## June 15, 2025 11:00 - Task Form Focus & Buffer Issues
+- Issue: Tab navigation not moving between all form fields (esp. TextArea)
+- Issue: Buffer not clearing when pressing Esc (form overlay remains)
+- Fix 1: Ensure all form components have IsFocusable set when form is shown
+- Fix 2: Force dirty flag on entire screen when hiding form to clear buffer
+- Fix 3: TextArea component needed explicit focus handling in Tab navigation
+
+## June 15, 2025 11:05 - Final Task Form Fixes
+- Changed all form components to have IsFocusable = $true by default
+- Enhanced Tab navigation to properly filter focusable components
+- Added Clear-ComponentFocus call when hiding form
+- Force RenderStats.FrameCount = 0 to trigger full buffer clear
+- Fixed focus state updates for cleaner transitions
+- Result: Tab navigation works through all fields including TextArea
+- Result: Buffer properly clears when pressing Esc
+
+## June 15, 2025 11:15 - Task Form Children Visible & TextArea Focus Issues
+- Issue: Form components showing on screen entry before panel is hidden
+- Issue: TextArea still not receiving focus during Tab navigation
+- Fix 1: Initialize form components with Visible = $false in task screen Init
+- Fix 2: Show/hide components explicitly when showing/hiding form
+- Fix 3: Add explicit TextArea focus check in Tab navigation handler
+
+## June 15, 2025 12:00 - New Task Form Not Rendering Children
+- Issue: Panel renders but children components not showing
+- Problem: Children remain hidden when panel is made visible
+- Fix: Make child components visible when showing form, not just the panel
+
+## June 15, 2025 12:10 - Form Panel Not Rendering At All
+- Issue: formPanel was being skipped in render loop
+- Problem: Component key 'formPanel' matched pattern '^form' and was skipped
+- Fix: Added exception to always render formPanel if visible, only skip other form components
+- Fix: Changed status bar bullet character (•) to pipe (|) to avoid encoding issues
+- Added debug logging to Panel render and layout methods for troubleshooting
