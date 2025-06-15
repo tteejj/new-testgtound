@@ -286,8 +286,8 @@ try {
     $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
 }
-# Task Management Screen - COMPLIANT VERSION
-# Using programmatic pattern with DataTable component
+# Task Management Screen - SIMPLIFIED VERSION
+# Using programmatic pattern with direct component addition
 
 function global:Get-TaskManagementScreen {
     $screen = @{
@@ -380,10 +380,15 @@ function global:Get-TaskManagementScreen {
             
             # Center the form panel
             $formWidth = 60
-            $formHeight = 24
+            $formHeight = 30
             $screen.Components.formPanel.X = [Math]::Floor(($global:TuiState.BufferWidth - $formWidth) / 2)
-            $screen.Components.formPanel.Y = 6
+            $screen.Components.formPanel.Y = 4
+            $screen.Components.formPanel.Width = $formWidth
+            $screen.Components.formPanel.Height = $formHeight
             $screen.Components.formPanel.Title = " New Task "
+            
+            # Recalculate layout after positioning
+            & $screen.Components.formPanel._RecalculateLayout -self $screen.Components.formPanel
             
             # Show form panel
             $screen.Components.formPanel.Visible = $true
@@ -433,10 +438,15 @@ function global:Get-TaskManagementScreen {
             
             # Center the form panel
             $formWidth = 60
-            $formHeight = 24
+            $formHeight = 30
             $screen.Components.formPanel.X = [Math]::Floor(($global:TuiState.BufferWidth - $formWidth) / 2)
-            $screen.Components.formPanel.Y = 6
+            $screen.Components.formPanel.Y = 4
+            $screen.Components.formPanel.Width = $formWidth
+            $screen.Components.formPanel.Height = $formHeight
             $screen.Components.formPanel.Title = " Edit Task "
+            
+            # Recalculate layout after positioning
+            & $screen.Components.formPanel._RecalculateLayout -self $screen.Components.formPanel
             
             # Show form panel
             $screen.Components.formPanel.Visible = $true
@@ -582,42 +592,42 @@ function global:Get-TaskManagementScreen {
                 Write-Log -Level Debug -Message "Loaded $($self.State.tasks.Count) tasks from global data"
             } else {
                 # Initialize sample tasks
-            $sampleTasks = @(
-                @{
-                    Id = [Guid]::NewGuid().ToString()
-                    Title = "Review documentation"
-                    Description = "Go through TUI framework docs and identify gaps"
-                    Category = "Work"
-                    Priority = "High"
-                    Status = "Active"
-                    DueDate = (Get-Date).AddDays(2).ToString("MM/dd/yy")
-                    Created = (Get-Date).AddDays(-3)
-                    Completed = $null
-                }
-                @{
-                    Id = [Guid]::NewGuid().ToString()
-                    Title = "Fix memory leaks"
-                    Description = "Address critical memory leak issues in event system"
-                    Category = "Urgent"
-                    Priority = "Critical"
-                    Status = "Active"
-                    DueDate = (Get-Date).AddDays(1).ToString("MM/dd/yy")
-                    Created = (Get-Date).AddDays(-1)
-                    Completed = $null
-                }
-                @{
-                    Id = [Guid]::NewGuid().ToString()
-                    Title = "Add clipboard support"
-                    Description = "Implement Ctrl+C/V in text components"
-                    Category = "Projects"
-                    Priority = "Medium"
-                    Status = "Completed"
-                    DueDate = (Get-Date).AddDays(-1).ToString("MM/dd/yy")
-                    Created = (Get-Date).AddDays(-7)
-                    Completed = (Get-Date).AddDays(-1)
-                }
-            )
-            
+                $sampleTasks = @(
+                    @{
+                        Id = [Guid]::NewGuid().ToString()
+                        Title = "Review documentation"
+                        Description = "Go through TUI framework docs and identify gaps"
+                        Category = "Work"
+                        Priority = "High"
+                        Status = "Active"
+                        DueDate = (Get-Date).AddDays(2).ToString("MM/dd/yy")
+                        Created = (Get-Date).AddDays(-3)
+                        Completed = $null
+                    }
+                    @{
+                        Id = [Guid]::NewGuid().ToString()
+                        Title = "Fix memory leaks"
+                        Description = "Address critical memory leak issues in event system"
+                        Category = "Urgent"
+                        Priority = "Critical"
+                        Status = "Active"
+                        DueDate = (Get-Date).AddDays(1).ToString("MM/dd/yy")
+                        Created = (Get-Date).AddDays(-1)
+                        Completed = $null
+                    }
+                    @{
+                        Id = [Guid]::NewGuid().ToString()
+                        Title = "Add clipboard support"
+                        Description = "Implement Ctrl+C/V in text components"
+                        Category = "Projects"
+                        Priority = "Medium"
+                        Status = "Completed"
+                        DueDate = (Get-Date).AddDays(-1).ToString("MM/dd/yy")
+                        Created = (Get-Date).AddDays(-7)
+                        Completed = (Get-Date).AddDays(-1)
+                    }
+                )
+                
                 $self.State.tasks = $sampleTasks
                 Write-Log -Level Debug -Message "Using sample tasks data"
             }
@@ -665,7 +675,7 @@ function global:Get-TaskManagementScreen {
             
             # Create form panel that will contain all form elements
             $self.Components.formPanel = New-TuiPanel -Props @{
-                X = 0; Y = 0; Width = 60; Height = 24  # Will be positioned when shown
+                X = 0; Y = 0; Width = 60; Height = 30  # Will be positioned when shown
                 Layout = 'Stack'
                 Orientation = 'Vertical' 
                 Spacing = 1
@@ -675,75 +685,55 @@ function global:Get-TaskManagementScreen {
                 Visible = $false
             }
             
-            # Title label and textbox in a row
-            $titleRow = New-TuiPanel -Props @{
-                Width = 56; Height = 4
-                Layout = 'Stack'
-                Orientation = 'Vertical'
-                Spacing = 0
-                Padding = 0
+            # Create form components directly
+            $titleLabel = New-TuiLabel -Props @{ 
+                Text = "Title:"
+                Width = 50
+                Height = 1
             }
-            $titleLabel = New-TuiLabel -Props @{ Text = "Title:"; Width = 50 }
+            
             $self.Components.formTitle = New-TuiTextBox -Props @{
-                Width = 54; Height = 3
+                Width = 54
+                Height = 3
                 Placeholder = "Enter task title..."
                 IsFocusable = $false
             }
-            $titleRow.AddChild($titleRow, $titleLabel)
-            $titleRow.AddChild($titleRow, $self.Components.formTitle)
             
-            # Description label and textarea in a row
-            $descRow = New-TuiPanel -Props @{
-                Width = 56; Height = 6
-                Layout = 'Stack'
-                Orientation = 'Vertical'
-                Spacing = 0
-                Padding = 0
+            $descLabel = New-TuiLabel -Props @{ 
+                Text = "Description:"
+                Width = 50
+                Height = 1
             }
-            $descLabel = New-TuiLabel -Props @{ Text = "Description:"; Width = 50 }
+            
             $self.Components.formDescription = New-TuiTextArea -Props @{
-                Width = 54; Height = 5
+                Width = 54
+                Height = 5
                 Placeholder = "Enter task description..."
                 IsFocusable = $false
             }
-            $descRow.AddChild($descRow, $descLabel)
-            $descRow.AddChild($descRow, $self.Components.formDescription)
             
-            # Category and Priority in horizontal layout
-            $categoryPriorityRow = New-TuiPanel -Props @{
-                Width = 56; Height = 4
-                Layout = 'Stack'
-                Orientation = 'Horizontal'
-                Spacing = 5
-                Padding = 0
+            $categoryLabel = New-TuiLabel -Props @{ 
+                Text = "Category:"
+                Width = 20
+                Height = 1
             }
             
-            $categoryPanel = New-TuiPanel -Props @{
-                Width = 25; Height = 4
-                Layout = 'Stack'
-                Orientation = 'Vertical'
-                Spacing = 0
-                Padding = 0
-            }
-            $categoryLabel = New-TuiLabel -Props @{ Text = "Category:"; Width = 20 }
             $self.Components.formCategory = New-TuiDropdown -Props @{
-                Width = 20; Height = 3
+                Width = 20
+                Height = 3
                 Options = $self.State.categories | ForEach-Object { @{ Display = $_; Value = $_ } }
                 IsFocusable = $false
             }
-            $categoryPanel.AddChild($categoryPanel, $categoryLabel)
-            $categoryPanel.AddChild($categoryPanel, $self.Components.formCategory)
             
-            $priorityPanel = New-TuiPanel -Props @{
-                Width = 25; Height = 4
-                Layout = 'Stack'
-                Orientation = 'Vertical'
-                Spacing = 0
-                Padding = 0
+            $priorityLabel = New-TuiLabel -Props @{ 
+                Text = "Priority:"
+                Width = 20
+                Height = 1
             }
-            $priorityLabel = New-TuiLabel -Props @{ Text = "Priority:"; Width = 20 }
+            
             $self.Components.formPriority = New-TuiDropdown -Props @{
-                Width = 20; Height = 3
+                Width = 20
+                Height = 3
                 Options = @(
                     @{ Display = "Critical"; Value = "Critical" }
                     @{ Display = "High"; Value = "High" }
@@ -752,60 +742,48 @@ function global:Get-TaskManagementScreen {
                 )
                 IsFocusable = $false
             }
-            $priorityPanel.AddChild($priorityPanel, $priorityLabel)
-            $priorityPanel.AddChild($priorityPanel, $self.Components.formPriority)
             
-            $categoryPriorityRow.AddChild($categoryPriorityRow, $categoryPanel)
-            $categoryPriorityRow.AddChild($categoryPriorityRow, $priorityPanel)
-            
-            # Due Date row
-            $dueDateRow = New-TuiPanel -Props @{
-                Width = 56; Height = 4
-                Layout = 'Stack'
-                Orientation = 'Vertical'
-                Spacing = 0
-                Padding = 0
+            $dueDateLabel = New-TuiLabel -Props @{ 
+                Text = "Due Date:"
+                Width = 50
+                Height = 1
             }
-            $dueDateLabel = New-TuiLabel -Props @{ Text = "Due Date:"; Width = 50 }
+            
             $self.Components.formDueDate = New-TuiDatePicker -Props @{
-                Width = 20; Height = 3
+                Width = 20
+                Height = 3
                 IsFocusable = $false
-            }
-            $dueDateRow.AddChild($dueDateRow, $dueDateLabel)
-            $dueDateRow.AddChild($dueDateRow, $self.Components.formDueDate)
-            
-            # Button row
-            $buttonRow = New-TuiPanel -Props @{
-                Width = 56; Height = 3
-                Layout = 'Stack'
-                Orientation = 'Horizontal'
-                Spacing = 5
-                Padding = 0
             }
             
             $self.Components.formSaveButton = New-TuiButton -Props @{
-                Width = 15; Height = 3
+                Width = 15
+                Height = 3
                 Text = "Save"
                 IsFocusable = $false
                 OnClick = { & $formScreen.SaveTask -screen $formScreen }
             }
             
             $self.Components.formCancelButton = New-TuiButton -Props @{
-                Width = 15; Height = 3
+                Width = 15
+                Height = 3
                 Text = "Cancel"
                 IsFocusable = $false
                 OnClick = { & $formScreen.HideForm -screen $formScreen }
             }
             
-            $buttonRow.AddChild($buttonRow, $self.Components.formSaveButton)
-            $buttonRow.AddChild($buttonRow, $self.Components.formCancelButton)
-            
-            # Add all rows to form panel
-            $self.Components.formPanel.AddChild($self.Components.formPanel, $titleRow)
-            $self.Components.formPanel.AddChild($self.Components.formPanel, $descRow)
-            $self.Components.formPanel.AddChild($self.Components.formPanel, $categoryPriorityRow)
-            $self.Components.formPanel.AddChild($self.Components.formPanel, $dueDateRow)
-            $self.Components.formPanel.AddChild($self.Components.formPanel, $buttonRow)
+            # Add all components directly to form panel
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $titleLabel
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $self.Components.formTitle
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $descLabel
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $self.Components.formDescription
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $categoryLabel
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $self.Components.formCategory
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $priorityLabel
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $self.Components.formPriority
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $dueDateLabel
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $self.Components.formDueDate
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $self.Components.formSaveButton
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $self.Components.formCancelButton
         }
         
         # 4. Render: Draw the screen and its components
@@ -7240,6 +7218,7 @@ function global:New-TuiLabel {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -7295,6 +7274,7 @@ function global:New-TuiButton {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -7439,6 +7419,7 @@ function global:New-TuiTextBox {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -7487,6 +7468,7 @@ function global:New-TuiCheckBox {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -7601,6 +7583,7 @@ function global:New-TuiDropdown {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -7647,6 +7630,7 @@ function global:New-TuiProgressBar {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -7911,6 +7895,7 @@ function global:New-TuiTextArea {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -7991,6 +7976,7 @@ function global:New-TuiDatePicker {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -8076,6 +8062,7 @@ function global:New-TuiTimePicker {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -8255,6 +8242,7 @@ function global:New-TuiTable {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -8344,6 +8332,7 @@ function global:New-TuiChart {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -8352,21 +8341,9 @@ function global:New-TuiChart {
 #region Container Components
 
 function global:New-TuiPanel {
-    <#
-    .SYNOPSIS
-    Creates a container component that manages child layout automatically
-    
-    .PARAMETER Props
-    Hashtable of properties including:
-    - Layout: 'Stack' (default) or 'Grid'
-    - Orientation: 'Vertical' (default) or 'Horizontal' (for Stack layout)
-    - Spacing: Space between children (default 1)
-    - Padding: Internal padding (default 1)
-    - ShowBorder: Whether to draw a border (default false)
-    #>
     param([hashtable]$Props = @{})
     
-    $component = @{
+    $componentDef = @{
         Type = "Panel"
         X = $Props.X ?? 0
         Y = $Props.Y ?? 0
@@ -8474,6 +8451,10 @@ function global:New-TuiPanel {
             param($self)
             if (-not $self.Visible) { return }
             
+            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                Write-Log -Level Debug -Message "Panel Render: Type=$($self.Type), X=$($self.X), Y=$($self.Y), Width=$($self.Width), Height=$($self.Height), Children=$($self.Children.Count)"
+            }
+            
             # Draw border if requested
             if ($self.ShowBorder) {
                 $borderColor = if ($self.IsFocused) {
@@ -8488,7 +8469,10 @@ function global:New-TuiPanel {
             
             # Render children
             foreach ($child in $self.Children) {
-                if ($child.Visible -and $child.Render) {
+                if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                    Write-Log -Level Debug -Message "  Child: Type=$($child.Type), X=$($child.X), Y=$($child.Y), Visible=$($child.Visible)"
+                }
+                if ($child.Visible -ne $false -and $child.Render) {
                     & $child.Render -self $child
                 }
             }
@@ -8501,10 +8485,11 @@ function global:New-TuiPanel {
         }
     }
     
+    # Return as hashtable - methods must be called with & operator
     # Initial layout calculation
-    & $component._RecalculateLayout -self $component
+    & $componentDef._RecalculateLayout -self $componentDef
     
-    return $component
+    return $componentDef
 }
 
 #endregion
@@ -8830,7 +8815,7 @@ function global:New-TuiDataTable {
                             $displayValue = $displayValue.Substring(0, $maxLength) + "..."
                         }
                     }
-                    }
+                    
                     
                     # Align value
                     $alignedValue = switch ($col.Align) {

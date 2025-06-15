@@ -301,7 +301,7 @@ function global:New-TuiDataTable {
                             $displayValue = $displayValue.Substring(0, $maxLength) + "..."
                         }
                     }
-                    }
+                    
                     
                     # Align value
                     $alignedValue = switch ($col.Align) {

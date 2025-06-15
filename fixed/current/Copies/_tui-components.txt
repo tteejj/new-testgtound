@@ -35,6 +35,7 @@ function global:New-TuiLabel {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -90,6 +91,7 @@ function global:New-TuiButton {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -234,6 +236,7 @@ function global:New-TuiTextBox {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -282,6 +285,7 @@ function global:New-TuiCheckBox {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -396,6 +400,7 @@ function global:New-TuiDropdown {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -442,6 +447,7 @@ function global:New-TuiProgressBar {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -706,6 +712,7 @@ function global:New-TuiTextArea {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -786,6 +793,7 @@ function global:New-TuiDatePicker {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -871,6 +879,7 @@ function global:New-TuiTimePicker {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -1050,6 +1059,7 @@ function global:New-TuiTable {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -1139,6 +1149,7 @@ function global:New-TuiChart {
         }
     }
     
+    # Return as hashtable to allow dynamic property assignment
     return $component
 }
 
@@ -1147,21 +1158,9 @@ function global:New-TuiChart {
 #region Container Components
 
 function global:New-TuiPanel {
-    <#
-    .SYNOPSIS
-    Creates a container component that manages child layout automatically
-    
-    .PARAMETER Props
-    Hashtable of properties including:
-    - Layout: 'Stack' (default) or 'Grid'
-    - Orientation: 'Vertical' (default) or 'Horizontal' (for Stack layout)
-    - Spacing: Space between children (default 1)
-    - Padding: Internal padding (default 1)
-    - ShowBorder: Whether to draw a border (default false)
-    #>
     param([hashtable]$Props = @{})
     
-    $component = @{
+    $componentDef = @{
         Type = "Panel"
         X = $Props.X ?? 0
         Y = $Props.Y ?? 0
@@ -1269,6 +1268,10 @@ function global:New-TuiPanel {
             param($self)
             if (-not $self.Visible) { return }
             
+            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                Write-Log -Level Debug -Message "Panel Render: Type=$($self.Type), X=$($self.X), Y=$($self.Y), Width=$($self.Width), Height=$($self.Height), Children=$($self.Children.Count)"
+            }
+            
             # Draw border if requested
             if ($self.ShowBorder) {
                 $borderColor = if ($self.IsFocused) {
@@ -1283,7 +1286,10 @@ function global:New-TuiPanel {
             
             # Render children
             foreach ($child in $self.Children) {
-                if ($child.Visible -and $child.Render) {
+                if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+                    Write-Log -Level Debug -Message "  Child: Type=$($child.Type), X=$($child.X), Y=$($child.Y), Visible=$($child.Visible)"
+                }
+                if ($child.Visible -ne $false -and $child.Render) {
                     & $child.Render -self $child
                 }
             }
@@ -1296,10 +1302,11 @@ function global:New-TuiPanel {
         }
     }
     
+    # Return as hashtable - methods must be called with & operator
     # Initial layout calculation
-    & $component._RecalculateLayout -self $component
+    & $componentDef._RecalculateLayout -self $componentDef
     
-    return $component
+    return $componentDef
 }
 
 #endregion
