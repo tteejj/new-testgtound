@@ -301,7 +301,6 @@ function global:Get-TaskManagementScreen {
             categories = @("Work", "Personal", "Urgent", "Projects")
             showingForm = $false
             editingTaskId = $null
-            formData = @{}
             showHelp = $false
         }
         
@@ -371,13 +370,6 @@ function global:Get-TaskManagementScreen {
             param($screen)
             $screen.State.showingForm = $true
             $screen.State.editingTaskId = $null
-            $screen.State.formData = @{
-                title = ""
-                description = ""
-                category = "Work"
-                priority = "Medium"
-                dueDate = (Get-Date).AddDays(7).ToString("MM/dd/yy")
-            }
             
             # Update form components
             $screen.Components.formTitle.Text = ""
@@ -386,16 +378,41 @@ function global:Get-TaskManagementScreen {
             $screen.Components.formPriority.Value = "Medium"
             $screen.Components.formDueDate.Value = (Get-Date).AddDays(7)
             
-            # Show form components
-            foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
-                $screen.Components[$comp].Visible = $true
-            }
+            # Center the form panel
+            $formWidth = 60
+            $formHeight = 24
+            $screen.Components.formPanel.X = [Math]::Floor(($global:TuiState.BufferWidth - $formWidth) / 2)
+            $screen.Components.formPanel.Y = 6
+            $screen.Components.formPanel.Title = " New Task "
+            
+            # Show form panel
+            $screen.Components.formPanel.Visible = $true
+            
+            # Enable focus on form components
+            $screen.Components.formTitle.IsFocusable = $true
+            $screen.Components.formDescription.IsFocusable = $true
+            $screen.Components.formCategory.IsFocusable = $true
+            $screen.Components.formPriority.IsFocusable = $true
+            $screen.Components.formDueDate.IsFocusable = $true
+            $screen.Components.formSaveButton.IsFocusable = $true
+            $screen.Components.formCancelButton.IsFocusable = $true
             
             # Hide table
-            $screen.Components.taskTable.Visible = $false
+            if ($screen.Components.taskTable) {
+                $screen.Components.taskTable.Visible = $false
+                $screen.Components.taskTable.IsFocusable = $false
+                $screen.Components.taskTable.IsFocused = $false
+            }
             
             # Focus first field
             $screen.FocusedComponentName = 'formTitle'
+            $screen.Components.formTitle.IsFocused = $true
+            
+            # Update engine focus
+            if (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue) {
+                Set-ComponentFocus -Component $screen.Components.formTitle
+            }
+            
             Request-TuiRefresh
         }
         
@@ -406,13 +423,6 @@ function global:Get-TaskManagementScreen {
             
             $screen.State.showingForm = $true
             $screen.State.editingTaskId = $task.Id
-            $screen.State.formData = @{
-                title = $task.Title
-                description = $task.Description
-                category = $task.Category
-                priority = $task.Priority
-                dueDate = $task.DueDate
-            }
             
             # Update form components
             $screen.Components.formTitle.Text = $task.Title
@@ -421,44 +431,76 @@ function global:Get-TaskManagementScreen {
             $screen.Components.formPriority.Value = $task.Priority
             $screen.Components.formDueDate.Value = [DateTime]::Parse($task.DueDate)
             
-            # Show form components
-            foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
-                $screen.Components[$comp].Visible = $true
-            }
+            # Center the form panel
+            $formWidth = 60
+            $formHeight = 24
+            $screen.Components.formPanel.X = [Math]::Floor(($global:TuiState.BufferWidth - $formWidth) / 2)
+            $screen.Components.formPanel.Y = 6
+            $screen.Components.formPanel.Title = " Edit Task "
+            
+            # Show form panel
+            $screen.Components.formPanel.Visible = $true
+            
+            # Enable focus on form components
+            $screen.Components.formTitle.IsFocusable = $true
+            $screen.Components.formDescription.IsFocusable = $true
+            $screen.Components.formCategory.IsFocusable = $true
+            $screen.Components.formPriority.IsFocusable = $true
+            $screen.Components.formDueDate.IsFocusable = $true
+            $screen.Components.formSaveButton.IsFocusable = $true
+            $screen.Components.formCancelButton.IsFocusable = $true
             
             # Hide table
-            $screen.Components.taskTable.Visible = $false
+            if ($screen.Components.taskTable) {
+                $screen.Components.taskTable.Visible = $false
+                $screen.Components.taskTable.IsFocusable = $false
+                $screen.Components.taskTable.IsFocused = $false
+            }
             
             # Focus first field
             $screen.FocusedComponentName = 'formTitle'
+            $screen.Components.formTitle.IsFocused = $true
+            
+            # Update engine focus
+            if (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue) {
+                Set-ComponentFocus -Component $screen.Components.formTitle
+            }
+            
             Request-TuiRefresh
         }
         
         SaveTask = {
             param($screen)
-            $formData = $screen.State.formData
+            
+            # Get current values from form components
+            $title = $screen.Components.formTitle.Text
+            $description = $screen.Components.formDescription.Text
+            $category = $screen.Components.formCategory.Value
+            $priority = $screen.Components.formPriority.Value
+            $dueDate = $screen.Components.formDueDate.Value
+            
             $editingId = $screen.State.editingTaskId
             
             if ($editingId) {
                 # Update existing
                 $task = $screen.State.tasks | Where-Object { $_.Id -eq $editingId }
                 if ($task) {
-                    $task.Title = $formData.title
-                    $task.Description = $formData.description
-                    $task.Category = $formData.category
-                    $task.Priority = $formData.priority
-                    $task.DueDate = $formData.dueDate
+                    $task.Title = $title
+                    $task.Description = $description
+                    $task.Category = $category
+                    $task.Priority = $priority
+                    $task.DueDate = if ($dueDate -is [DateTime]) { $dueDate.ToString("MM/dd/yy") } else { $dueDate }
                 }
             } else {
                 # Add new
                 $newTask = @{
                     Id = [Guid]::NewGuid().ToString()
-                    Title = $formData.title
-                    Description = $formData.description
-                    Category = $formData.category
-                    Priority = $formData.priority
+                    Title = $title
+                    Description = $description
+                    Category = $category
+                    Priority = $priority
                     Status = "Active"
-                    DueDate = $formData.dueDate
+                    DueDate = if ($dueDate -is [DateTime]) { $dueDate.ToString("MM/dd/yy") } else { $dueDate }
                     Created = Get-Date
                     Completed = $null
                 }
@@ -473,13 +515,30 @@ function global:Get-TaskManagementScreen {
             param($screen)
             $screen.State.showingForm = $false
             
-            # Hide form components
-            foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
-                $screen.Components[$comp].Visible = $false
-            }
+            # Hide form panel
+            $screen.Components.formPanel.Visible = $false
+            
+            # Disable focus on form components
+            $screen.Components.formTitle.IsFocusable = $false
+            $screen.Components.formTitle.IsFocused = $false
+            $screen.Components.formDescription.IsFocusable = $false
+            $screen.Components.formDescription.IsFocused = $false
+            $screen.Components.formCategory.IsFocusable = $false
+            $screen.Components.formCategory.IsFocused = $false
+            $screen.Components.formPriority.IsFocusable = $false
+            $screen.Components.formPriority.IsFocused = $false
+            $screen.Components.formDueDate.IsFocusable = $false
+            $screen.Components.formDueDate.IsFocused = $false
+            $screen.Components.formSaveButton.IsFocusable = $false
+            $screen.Components.formSaveButton.IsFocused = $false
+            $screen.Components.formCancelButton.IsFocusable = $false
+            $screen.Components.formCancelButton.IsFocused = $false
             
             # Show table
-            $screen.Components.taskTable.Visible = $true
+            if ($screen.Components.taskTable) {
+                $screen.Components.taskTable.Visible = $true
+                $screen.Components.taskTable.IsFocusable = $true
+            }
             $screen.FocusedComponentName = 'taskTable'
             Request-TuiRefresh
         }
@@ -517,7 +576,12 @@ function global:Get-TaskManagementScreen {
         Init = {
             param($self)
             
-            # Initialize sample tasks
+            # Try to load from global data first
+            if ($global:Data -and $global:Data.Tasks -and $global:Data.Tasks.Count -gt 0) {
+                $self.State.tasks = @($global:Data.Tasks | ForEach-Object { $_ })
+                Write-Log -Level Debug -Message "Loaded $($self.State.tasks.Count) tasks from global data"
+            } else {
+                # Initialize sample tasks
             $sampleTasks = @(
                 @{
                     Id = [Guid]::NewGuid().ToString()
@@ -554,7 +618,9 @@ function global:Get-TaskManagementScreen {
                 }
             )
             
-            $self.State.tasks = $sampleTasks
+                $self.State.tasks = $sampleTasks
+                Write-Log -Level Debug -Message "Using sample tasks data"
+            }
             
             # Create main task table
             $tableScreen = $self  # Capture reference for closure
@@ -596,58 +662,150 @@ function global:Get-TaskManagementScreen {
             
             # Form components (hidden by default)
             $formScreen = $self  # Capture reference for closures
+            
+            # Create form panel that will contain all form elements
+            $self.Components.formPanel = New-TuiPanel -Props @{
+                X = 0; Y = 0; Width = 60; Height = 24  # Will be positioned when shown
+                Layout = 'Stack'
+                Orientation = 'Vertical' 
+                Spacing = 1
+                Padding = 2
+                ShowBorder = $true
+                Title = " Task Form "
+                Visible = $false
+            }
+            
+            # Title label and textbox in a row
+            $titleRow = New-TuiPanel -Props @{
+                Width = 56; Height = 4
+                Layout = 'Stack'
+                Orientation = 'Vertical'
+                Spacing = 0
+                Padding = 0
+            }
+            $titleLabel = New-TuiLabel -Props @{ Text = "Title:"; Width = 50 }
             $self.Components.formTitle = New-TuiTextBox -Props @{
-                X = 25; Y = 10; Width = 54; Height = 3
+                Width = 54; Height = 3
                 Placeholder = "Enter task title..."
-                Visible = $false
-                OnChange = { param($self, $Key) $formScreen.State.formData.title = $self.Text }
+                IsFocusable = $false
             }
+            $titleRow.AddChild($titleRow, $titleLabel)
+            $titleRow.AddChild($titleRow, $self.Components.formTitle)
             
+            # Description label and textarea in a row
+            $descRow = New-TuiPanel -Props @{
+                Width = 56; Height = 6
+                Layout = 'Stack'
+                Orientation = 'Vertical'
+                Spacing = 0
+                Padding = 0
+            }
+            $descLabel = New-TuiLabel -Props @{ Text = "Description:"; Width = 50 }
             $self.Components.formDescription = New-TuiTextArea -Props @{
-                X = 25; Y = 14; Width = 54; Height = 5
+                Width = 54; Height = 5
                 Placeholder = "Enter task description..."
-                Visible = $false
-                OnChange = { param($self, $Key) $formScreen.State.formData.description = $self.Text }
+                IsFocusable = $false
+            }
+            $descRow.AddChild($descRow, $descLabel)
+            $descRow.AddChild($descRow, $self.Components.formDescription)
+            
+            # Category and Priority in horizontal layout
+            $categoryPriorityRow = New-TuiPanel -Props @{
+                Width = 56; Height = 4
+                Layout = 'Stack'
+                Orientation = 'Horizontal'
+                Spacing = 5
+                Padding = 0
             }
             
+            $categoryPanel = New-TuiPanel -Props @{
+                Width = 25; Height = 4
+                Layout = 'Stack'
+                Orientation = 'Vertical'
+                Spacing = 0
+                Padding = 0
+            }
+            $categoryLabel = New-TuiLabel -Props @{ Text = "Category:"; Width = 20 }
             $self.Components.formCategory = New-TuiDropdown -Props @{
-                X = 25; Y = 20; Width = 20; Height = 3
+                Width = 20; Height = 3
                 Options = $self.State.categories | ForEach-Object { @{ Display = $_; Value = $_ } }
-                Visible = $false
-                OnChange = { param($NewValue) $formScreen.State.formData.category = $NewValue }
+                IsFocusable = $false
             }
+            $categoryPanel.AddChild($categoryPanel, $categoryLabel)
+            $categoryPanel.AddChild($categoryPanel, $self.Components.formCategory)
             
+            $priorityPanel = New-TuiPanel -Props @{
+                Width = 25; Height = 4
+                Layout = 'Stack'
+                Orientation = 'Vertical'
+                Spacing = 0
+                Padding = 0
+            }
+            $priorityLabel = New-TuiLabel -Props @{ Text = "Priority:"; Width = 20 }
             $self.Components.formPriority = New-TuiDropdown -Props @{
-                X = 50; Y = 20; Width = 20; Height = 3
+                Width = 20; Height = 3
                 Options = @(
                     @{ Display = "Critical"; Value = "Critical" }
                     @{ Display = "High"; Value = "High" }
                     @{ Display = "Medium"; Value = "Medium" }
                     @{ Display = "Low"; Value = "Low" }
                 )
-                Visible = $false
-                OnChange = { param($NewValue) $formScreen.State.formData.priority = $NewValue }
+                IsFocusable = $false
             }
+            $priorityPanel.AddChild($priorityPanel, $priorityLabel)
+            $priorityPanel.AddChild($priorityPanel, $self.Components.formPriority)
             
+            $categoryPriorityRow.AddChild($categoryPriorityRow, $categoryPanel)
+            $categoryPriorityRow.AddChild($categoryPriorityRow, $priorityPanel)
+            
+            # Due Date row
+            $dueDateRow = New-TuiPanel -Props @{
+                Width = 56; Height = 4
+                Layout = 'Stack'
+                Orientation = 'Vertical'
+                Spacing = 0
+                Padding = 0
+            }
+            $dueDateLabel = New-TuiLabel -Props @{ Text = "Due Date:"; Width = 50 }
             $self.Components.formDueDate = New-TuiDatePicker -Props @{
-                X = 25; Y = 24; Width = 20; Height = 3
-                Visible = $false
-                OnChange = { param($NewValue) $formScreen.State.formData.dueDate = $NewValue.ToString("MM/dd/yy") }
+                Width = 20; Height = 3
+                IsFocusable = $false
+            }
+            $dueDateRow.AddChild($dueDateRow, $dueDateLabel)
+            $dueDateRow.AddChild($dueDateRow, $self.Components.formDueDate)
+            
+            # Button row
+            $buttonRow = New-TuiPanel -Props @{
+                Width = 56; Height = 3
+                Layout = 'Stack'
+                Orientation = 'Horizontal'
+                Spacing = 5
+                Padding = 0
             }
             
             $self.Components.formSaveButton = New-TuiButton -Props @{
-                X = 30; Y = 28; Width = 15; Height = 3
+                Width = 15; Height = 3
                 Text = "Save"
-                Visible = $false
+                IsFocusable = $false
                 OnClick = { & $formScreen.SaveTask -screen $formScreen }
             }
             
             $self.Components.formCancelButton = New-TuiButton -Props @{
-                X = 50; Y = 28; Width = 15; Height = 3
+                Width = 15; Height = 3
                 Text = "Cancel"
-                Visible = $false
+                IsFocusable = $false
                 OnClick = { & $formScreen.HideForm -screen $formScreen }
             }
+            
+            $buttonRow.AddChild($buttonRow, $self.Components.formSaveButton)
+            $buttonRow.AddChild($buttonRow, $self.Components.formCancelButton)
+            
+            # Add all rows to form panel
+            $self.Components.formPanel.AddChild($self.Components.formPanel, $titleRow)
+            $self.Components.formPanel.AddChild($self.Components.formPanel, $descRow)
+            $self.Components.formPanel.AddChild($self.Components.formPanel, $categoryPriorityRow)
+            $self.Components.formPanel.AddChild($self.Components.formPanel, $dueDateRow)
+            $self.Components.formPanel.AddChild($self.Components.formPanel, $buttonRow)
         }
         
         # 4. Render: Draw the screen and its components
@@ -655,7 +813,7 @@ function global:Get-TaskManagementScreen {
             param($self)
             
             # Header
-            $headerColor = Get-ThemeColor "Header"
+            $headerColor = Get-ThemeColor "Header" -Default ([ConsoleColor]::Cyan)
             Write-BufferString -X 2 -Y 1 -Text "Task Management" -ForegroundColor $headerColor
             
             # Filter/Sort toolbar
@@ -678,31 +836,6 @@ function global:Get-TaskManagementScreen {
                 $color = if ($isSelected) { [ConsoleColor]::Yellow } else { [ConsoleColor]::White }
                 Write-BufferString -X $sortX -Y $toolbarY -Text "[$($option.Display)]" -ForegroundColor $color
                 $sortX += $option.Display.Length + 4
-            }
-            
-            # Form overlay
-            if ($self.State.showingForm) {
-                $formWidth = 60
-                $formHeight = 24
-                $formX = [Math]::Floor(($global:TuiState.BufferWidth - $formWidth) / 2)
-                $formY = 6
-                
-                # Form background
-                for ($y = $formY; $y -lt ($formY + $formHeight); $y++) {
-                    for ($x = $formX; $x -lt ($formX + $formWidth); $x++) {
-                        Write-BufferString -X $x -Y $y -Text " " -BackgroundColor ([ConsoleColor]::DarkGray)
-                    }
-                }
-                
-                $title = if ($self.State.editingTaskId) { "Edit Task" } else { "New Task" }
-                Write-BufferBox -X $formX -Y $formY -Width $formWidth -Height $formHeight -Title " $title " -BorderColor ([ConsoleColor]::Yellow)
-                
-                # Form labels
-                Write-BufferString -X ($formX + 3) -Y ($formY + 2) -Text "Title:" -ForegroundColor ([ConsoleColor]::White)
-                Write-BufferString -X ($formX + 3) -Y ($formY + 6) -Text "Description:" -ForegroundColor ([ConsoleColor]::White)
-                Write-BufferString -X ($formX + 3) -Y ($formY + 12) -Text "Category:" -ForegroundColor ([ConsoleColor]::White)
-                Write-BufferString -X ($formX + 28) -Y ($formY + 12) -Text "Priority:" -ForegroundColor ([ConsoleColor]::White)
-                Write-BufferString -X ($formX + 3) -Y ($formY + 16) -Text "Due Date:" -ForegroundColor ([ConsoleColor]::White)
             }
             
             # Help panel
@@ -781,9 +914,36 @@ function global:Get-TaskManagementScreen {
                     ([ConsoleKey]::Tab) {
                         # Cycle through form fields
                         $formFields = @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')
-                        $currentIndex = [array]::IndexOf($formFields, $self.FocusedComponentName)
-                        $nextIndex = ($currentIndex + 1) % $formFields.Count
-                        $self.FocusedComponentName = $formFields[$nextIndex]
+                        $visibleFields = $formFields | Where-Object { $self.Components[$_] -and $self.Components[$_].Visible }
+                        
+                        if ($visibleFields.Count -gt 0) {
+                            $currentIndex = [array]::IndexOf($visibleFields, $self.FocusedComponentName)
+                            if ($currentIndex -eq -1) { $currentIndex = 0 }
+                            
+                            if ($Key.Modifiers -band [ConsoleModifiers]::Shift) {
+                                # Shift+Tab - go backwards
+                                $nextIndex = ($currentIndex - 1 + $visibleFields.Count) % $visibleFields.Count
+                            } else {
+                                # Tab - go forwards
+                                $nextIndex = ($currentIndex + 1) % $visibleFields.Count
+                            }
+                            
+                            $self.FocusedComponentName = $visibleFields[$nextIndex]
+                            
+                            # Update component focus states
+                            foreach ($field in $formFields) {
+                                if ($self.Components[$field]) {
+                                    $self.Components[$field].IsFocused = ($field -eq $self.FocusedComponentName)
+                                }
+                            }
+                            
+                            # Update engine's focus tracking
+                            $focusedComponent = $self.Components[$self.FocusedComponentName]
+                            if ($focusedComponent -and (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue)) {
+                                Set-ComponentFocus -Component $focusedComponent
+                            }
+                        }
+                        
                         Request-TuiRefresh
                         return $true
                     }
@@ -886,12 +1046,29 @@ function global:Get-TaskManagementScreen {
             
             return $false
         }
+        
+        # 6. Lifecycle Hooks
+        OnResume = {
+            param($self)
+            # Refresh tasks from global data when returning to screen
+            if ($global:Data -and $global:Data.Tasks) {
+                $self.State.tasks = @($global:Data.Tasks | ForEach-Object { $_ })
+                & $self.RefreshTaskTable -screen $self
+                Write-Log -Level Debug -Message "Refreshed tasks from global data: $($self.State.tasks.Count) tasks"
+            }
+            Request-TuiRefresh
+        }
     }
     
     return $screen
 }
 
-Export-ModuleMember -Function Get-TaskManagementScreen
+# Alias for compatibility
+function global:Get-TaskScreen {
+    return Get-TaskManagementScreen
+}
+
+Export-ModuleMember -Function Get-TaskManagementScreen, Get-TaskScreen
 # Dashboard Screen - FIXED COMPLIANT VERSION
 # Using programmatic pattern with component-based architecture
 
@@ -948,6 +1125,10 @@ function global:Get-DashboardScreen {
                     }
                     if ($screen.Components.activeTimers) {
                         $screen.Components.activeTimers.Data = $timerData
+                        # Force process data to refresh display
+                        if ($screen.Components.activeTimers.ProcessData) {
+                            & $screen.Components.activeTimers.ProcessData -self $screen.Components.activeTimers
+                        }
                     }
                     Write-Log -Level Debug -Message "Active timers updated: $($timerData.Count) timers"
                 }
@@ -973,6 +1154,10 @@ function global:Get-DashboardScreen {
                     }
                     if ($screen.Components.todaysTasks) {
                         $screen.Components.todaysTasks.Data = $taskData | Sort-Object Priority, Description
+                        # Force process data to refresh display
+                        if ($screen.Components.todaysTasks.ProcessData) {
+                            & $screen.Components.todaysTasks.ProcessData -self $screen.Components.todaysTasks
+                        }
                     }
                     Write-Log -Level Debug -Message "Today's tasks updated: $($taskData.Count) tasks"
                 }
@@ -1030,8 +1215,9 @@ function global:Get-DashboardScreen {
                     $self.Components.quickActions = New-TuiDataTable -Props @{
                         X = 2; Y = 4; Width = 35; Height = 12
                         IsFocusable = $true
+                        ShowBorder = $false  # Parent screen draws the border
                         Columns = @(
-                            @{ Name = "Action"; Header = "Quick Actions"; Width = 30 }
+                            @{ Name = "Action"; Header = "Quick Actions" }  # Let width auto-calculate
                         )
                         Data = @(
                             @{ Action = "1. Add Time Entry" }
@@ -1053,20 +1239,92 @@ function global:Get-DashboardScreen {
                             switch ($SelectedIndex) {
                                 0 { if (Get-Command Get-TimeEntryFormScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimeEntryFormScreen) } }
                                 1 { if (Get-Command Get-TimerStartScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimerStartScreen) } }
-                                2 { if (Get-Command Get-TaskManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskManagementScreen) } }
+                                2 { if (Get-Command Get-TaskScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskScreen) } elseif (Get-Command Get-TaskManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskManagementScreen) } }
                                 3 { if (Get-Command Get-ProjectManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ProjectManagementScreen) } }
                                 4 { if (Get-Command Get-ReportsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ReportsScreen) } }
                                 5 { if (Get-Command Get-SettingsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-SettingsScreen) } }
                             }
                         }
                     }
+                    
+                    # Debug logging
+                    Write-Log -Level Debug -Message "Quick Actions DataTable created with data:"
+                    foreach ($item in $self.Components.quickActions.Data) {
+                        Write-Log -Level Debug -Message "  Action: '$($item.Action)' (Length: $($item.Action.Length))"
+                    }
+                    
                     # Force process data to ensure display
                     if ($self.Components.quickActions.ProcessData) {
                         & $self.Components.quickActions.ProcessData -self $self.Components.quickActions
+                        Write-Log -Level Debug -Message "ProcessedData count: $($self.Components.quickActions.ProcessedData.Count)"
+                        if ($self.Components.quickActions.ProcessedData.Count -gt 0) {
+                            Write-Log -Level Debug -Message "First processed item: $($self.Components.quickActions.ProcessedData[0] | ConvertTo-Json -Compress)"
+                        }
                     }
-                    Write-Log -Level Debug -Message "Quick Actions DataTable created"
+                    Write-Log -Level Debug -Message "Quick Actions DataTable ProcessData called"
                 } else {
                     Write-Log -Level Warning -Message "DataTable component not available, using basic rendering"
+                    # Fallback to simple rendering
+                    $self.Components.quickActions = @{
+                        Type = "QuickActionsList"
+                        X = 2; Y = 4; Width = 35; Height = 12
+                        IsFocusable = $true
+                        Visible = $true
+                        SelectedIndex = 0
+                        Items = @(
+                            "1. Add Time Entry"
+                            "2. Start Timer"
+                            "3. Manage Tasks"
+                            "4. Manage Projects"
+                            "5. View Reports"
+                            "6. Settings"
+                        )
+                        Render = {
+                            param($self)
+                            $y = $self.Y
+                            foreach ($i in 0..($self.Items.Count - 1)) {
+                                $item = $self.Items[$i]
+                                $fg = if ($self.IsFocused -and $i -eq $self.SelectedIndex) { 
+                                    Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan)
+                                } else { 
+                                    Get-ThemeColor "Primary" -Default ([ConsoleColor]::White)
+                                }
+                                Write-BufferString -X $self.X -Y $y -Text $item -ForegroundColor $fg
+                                $y++
+                            }
+                        }
+                        HandleInput = {
+                            param($self, $Key)
+                            switch ($Key.Key) {
+                                ([ConsoleKey]::UpArrow) {
+                                    if ($self.SelectedIndex -gt 0) {
+                                        $self.SelectedIndex--
+                                        Request-TuiRefresh
+                                    }
+                                    return $true
+                                }
+                                ([ConsoleKey]::DownArrow) {
+                                    if ($self.SelectedIndex -lt $self.Items.Count - 1) {
+                                        $self.SelectedIndex++
+                                        Request-TuiRefresh
+                                    }
+                                    return $true
+                                }
+                                ([ConsoleKey]::Enter) {
+                                    switch ($self.SelectedIndex) {
+                                        0 { if (Get-Command Get-TimeEntryFormScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimeEntryFormScreen) } }
+                                        1 { if (Get-Command Get-TimerStartScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimerStartScreen) } }
+                                        2 { if (Get-Command Get-TaskScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskScreen) } }
+                                        3 { if (Get-Command Get-ProjectManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ProjectManagementScreen) } }
+                                        4 { if (Get-Command Get-ReportsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ReportsScreen) } }
+                                        5 { if (Get-Command Get-SettingsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-SettingsScreen) } }
+                                    }
+                                    return $true
+                                }
+                            }
+                            return $false
+                        }
+                    }
                 }
                 
                 # Active Timers
@@ -1074,6 +1332,7 @@ function global:Get-DashboardScreen {
                     $self.Components.activeTimers = New-TuiDataTable -Props @{
                         X = 40; Y = 4; Width = 40; Height = 12
                         IsFocusable = $true
+                        ShowBorder = $false  # Parent screen draws the border
                         Columns = @(
                             @{ Name = "Project"; Header = "Project"; Width = 20 }
                             @{ Name = "Time"; Header = "Time"; Width = 10 }
@@ -1085,6 +1344,10 @@ function global:Get-DashboardScreen {
                         Title = "Active Timers"
                         ShowFooter = $false
                     }
+                    # Force process data to ensure display
+                    if ($self.Components.activeTimers.ProcessData) {
+                        & $self.Components.activeTimers.ProcessData -self $self.Components.activeTimers
+                    }
                     Write-Log -Level Debug -Message "Active Timers DataTable created"
                 }
                 
@@ -1093,6 +1356,7 @@ function global:Get-DashboardScreen {
                     $self.Components.todaysTasks = New-TuiDataTable -Props @{
                         X = 2; Y = 18; Width = 78; Height = 10
                         IsFocusable = $true
+                        ShowBorder = $false  # Parent screen draws the border
                         Columns = @(
                             @{ Name = "Priority"; Header = "Pri"; Width = 8 }
                             @{ Name = "Description"; Header = "Task"; Width = 50 }
@@ -1104,6 +1368,10 @@ function global:Get-DashboardScreen {
                         MultiSelect = $false
                         Title = "Today's Tasks"
                         ShowFooter = $false
+                    }
+                    # Force process data to ensure display
+                    if ($self.Components.todaysTasks.ProcessData) {
+                        & $self.Components.todaysTasks.ProcessData -self $self.Components.todaysTasks
                     }
                     Write-Log -Level Debug -Message "Today's Tasks DataTable created"
                 }
@@ -1151,7 +1419,7 @@ function global:Get-DashboardScreen {
                 }
                 
                 # Header
-                $headerColor = Get-ThemeColor "Header"
+                $headerColor = Get-ThemeColor "Header" -Default ([ConsoleColor]::Cyan)
                 $currentTime = Get-Date -Format 'dddd, MMMM dd, yyyy HH:mm:ss'
                 Write-BufferString -X 2 -Y 1 -Text "PMC Terminal Dashboard - $currentTime" -ForegroundColor $headerColor
                 
@@ -1163,10 +1431,10 @@ function global:Get-DashboardScreen {
                 }
                 
                 # Draw boxes for organization
-                Write-BufferBox -X 1 -Y 3 -Width 37 -Height 14 -Title " Quick Actions " -BorderColor (Get-ThemeColor "Accent")
-                Write-BufferBox -X 39 -Y 3 -Width 42 -Height 14 -Title " Active Timers " -BorderColor (Get-ThemeColor "Info")
-                Write-BufferBox -X 83 -Y 3 -Width 20 -Height 14 -Title " Stats " -BorderColor (Get-ThemeColor "Success")
-                Write-BufferBox -X 1 -Y 17 -Width 80 -Height 12 -Title " Today's Tasks " -BorderColor (Get-ThemeColor "Warning")
+                Write-BufferBox -X 1 -Y 3 -Width 37 -Height 14 -Title " Quick Actions " -BorderColor (Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan))
+                Write-BufferBox -X 39 -Y 3 -Width 42 -Height 14 -Title " Active Timers " -BorderColor (Get-ThemeColor "Info" -Default ([ConsoleColor]::Blue))
+                Write-BufferBox -X 83 -Y 3 -Width 20 -Height 14 -Title " Stats " -BorderColor (Get-ThemeColor "Success" -Default ([ConsoleColor]::Green))
+                Write-BufferBox -X 1 -Y 17 -Width 80 -Height 12 -Title " Today's Tasks " -BorderColor (Get-ThemeColor "Warning" -Default ([ConsoleColor]::Yellow))
                 
                 # Render all components
                 foreach ($kvp in $self.Components.GetEnumerator()) {
@@ -1181,7 +1449,7 @@ function global:Get-DashboardScreen {
                 }
                 
                 # Status bar
-                $subtleColor = Get-ThemeColor "Subtle"
+                $subtleColor = Get-ThemeColor "Subtle" -Default ([ConsoleColor]::DarkGray)
                 $statusY = $global:TuiState.BufferHeight - 2
                 Write-BufferString -X 2 -Y $statusY -Text "Tab: Switch Focus • Enter: Select • R: Refresh • Q: Quit • F12: Debug Log" -ForegroundColor $subtleColor
                 
@@ -1264,7 +1532,7 @@ function global:Get-DashboardScreen {
                     switch ($index) {
                         0 { if (Get-Command Get-TimeEntryFormScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimeEntryFormScreen) } }
                         1 { if (Get-Command Get-TimerStartScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimerStartScreen) } }
-                        2 { if (Get-Command Get-TaskManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskManagementScreen) } }
+                        2 { if (Get-Command Get-TaskScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskScreen) } elseif (Get-Command Get-TaskManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskManagementScreen) } }
                         3 { if (Get-Command Get-ProjectManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ProjectManagementScreen) } }
                         4 { if (Get-Command Get-ReportsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ReportsScreen) } }
                         5 { if (Get-Command Get-SettingsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-SettingsScreen) } }
@@ -5535,11 +5803,13 @@ function global:Write-BufferBox {
     # Title
     if ($Title) {
         $titleText = " $Title "
-        if ($titleText.Length > ($Width - 2)) { 
-            $titleText = " $($Title.Substring(0, $Width - 5))... " 
+        if ($titleText.Length > ($Width - 2)) {
+            # FIX: Ensure the length for Substring is never negative.
+            $maxLength = [Math]::Max(0, $Width - 5)
+            $titleText = " $($Title.Substring(0, $maxLength))... "
         }
         $titleX = $X + [Math]::Floor(($Width - $titleText.Length) / 2)
-        Write-BufferString -X $titleX -Y $Y -Text $titleText -ForegroundColor $BorderColor -BackgroundColor $BackgroundColor
+       Write-BufferString -X $titleX -Y $Y -Text $titleText -ForegroundColor $BorderColor -BackgroundColor $BackgroundColor
     }
     
     # Sides and Fill
@@ -8079,6 +8349,166 @@ function global:New-TuiChart {
 
 #endregion
 
+#region Container Components
+
+function global:New-TuiPanel {
+    <#
+    .SYNOPSIS
+    Creates a container component that manages child layout automatically
+    
+    .PARAMETER Props
+    Hashtable of properties including:
+    - Layout: 'Stack' (default) or 'Grid'
+    - Orientation: 'Vertical' (default) or 'Horizontal' (for Stack layout)
+    - Spacing: Space between children (default 1)
+    - Padding: Internal padding (default 1)
+    - ShowBorder: Whether to draw a border (default false)
+    #>
+    param([hashtable]$Props = @{})
+    
+    $component = @{
+        Type = "Panel"
+        X = $Props.X ?? 0
+        Y = $Props.Y ?? 0
+        Width = $Props.Width ?? 40
+        Height = $Props.Height ?? 20
+        Visible = $Props.Visible ?? $true
+        IsFocusable = $Props.IsFocusable ?? $false
+        Children = @()
+        
+        # Layout properties
+        Layout = $Props.Layout ?? 'Stack'
+        Orientation = $Props.Orientation ?? 'Vertical'
+        Spacing = $Props.Spacing ?? 1
+        Padding = $Props.Padding ?? 1
+        ShowBorder = $Props.ShowBorder ?? $false
+        Title = $Props.Title
+        
+        # Methods
+        AddChild = {
+            param($self, $Child)
+            $self.Children += $Child
+            # Immediately recalculate layout
+            & $self._RecalculateLayout -self $self
+        }
+        
+        RemoveChild = {
+            param($self, $Child)
+            $self.Children = @($self.Children | Where-Object { $_ -ne $Child })
+            & $self._RecalculateLayout -self $self
+        }
+        
+        _RecalculateLayout = {
+            param($self)
+            
+            # Calculate content area
+            $contentX = $self.X + $self.Padding
+            $contentY = $self.Y + $self.Padding
+            $contentWidth = $self.Width - ($self.Padding * 2)
+            $contentHeight = $self.Height - ($self.Padding * 2)
+            
+            if ($self.ShowBorder) {
+                $contentX++
+                $contentY++
+                $contentWidth -= 2
+                $contentHeight -= 2
+            }
+            
+            # Apply layout
+            switch ($self.Layout) {
+                'Stack' {
+                    $currentX = $contentX
+                    $currentY = $contentY
+                    
+                    foreach ($child in $self.Children) {
+                        if (-not $child.Visible) { continue }
+                        
+                        $child.X = $currentX
+                        $child.Y = $currentY
+                        
+                        # Constrain child size to panel
+                        if ($self.Orientation -eq 'Vertical') {
+                            $child.Width = [Math]::Min($child.Width, $contentWidth)
+                            $currentY += $child.Height + $self.Spacing
+                        } else {
+                            $child.Height = [Math]::Min($child.Height, $contentHeight)
+                            $currentX += $child.Width + $self.Spacing
+                        }
+                    }
+                }
+                
+                'Grid' {
+                    # Simple grid - auto columns based on width
+                    if ($self.Children.Count -eq 0) { return }
+                    
+                    # Estimate columns based on average child width
+                    $avgWidth = 20
+                    if ($self.Children[0].Width) {
+                        $avgWidth = $self.Children[0].Width
+                    }
+                    
+                    $cols = [Math]::Max(1, [Math]::Floor($contentWidth / ($avgWidth + $self.Spacing)))
+                    $cellWidth = [Math]::Floor(($contentWidth - ($cols - 1) * $self.Spacing) / $cols)
+                    
+                    $row = 0
+                    $col = 0
+                    
+                    foreach ($child in $self.Children) {
+                        if (-not $child.Visible) { continue }
+                        
+                        $child.X = $contentX + ($col * ($cellWidth + $self.Spacing))
+                        $child.Y = $contentY + ($row * ($child.Height + $self.Spacing))
+                        $child.Width = [Math]::Min($child.Width, $cellWidth)
+                        
+                        $col++
+                        if ($col -ge $cols) {
+                            $col = 0
+                            $row++
+                        }
+                    }
+                }
+            }
+        }
+        
+        Render = {
+            param($self)
+            if (-not $self.Visible) { return }
+            
+            # Draw border if requested
+            if ($self.ShowBorder) {
+                $borderColor = if ($self.IsFocused) {
+                    Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan)
+                } else {
+                    Get-ThemeColor "Border" -Default ([ConsoleColor]::DarkGray)
+                }
+                
+                Write-BufferBox -X $self.X -Y $self.Y -Width $self.Width -Height $self.Height `
+                    -BorderColor $borderColor -Title $self.Title
+            }
+            
+            # Render children
+            foreach ($child in $self.Children) {
+                if ($child.Visible -and $child.Render) {
+                    & $child.Render -self $child
+                }
+            }
+        }
+        
+        HandleInput = {
+            param($self, $Key)
+            # Panels don't handle input directly, but could implement focus management
+            return $false
+        }
+    }
+    
+    # Initial layout calculation
+    & $component._RecalculateLayout -self $component
+    
+    return $component
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     # Basic Components
     'New-TuiLabel',
@@ -8093,7 +8523,9 @@ Export-ModuleMember -Function @(
     'New-TuiTimePicker',
     # Data Display Components
     'New-TuiTable',
-    'New-TuiChart'
+    'New-TuiChart',
+    # Container Components
+    'New-TuiPanel'
 )
 # Advanced Data Components Module
 # Enhanced data display components with sorting, filtering, and pagination
@@ -8109,6 +8541,8 @@ function global:New-TuiDataTable {
         Y = $Props.Y ?? 0
         Width = $Props.Width ?? 80
         Height = $Props.Height ?? 20
+        Title = $Props.Title
+        ShowBorder = $Props.ShowBorder ?? $true  # <-- NEW: Controls whether component draws its own border
         Data = $Props.Data ?? @()
         Columns = $Props.Columns ?? @()
         SelectedRow = 0
@@ -8195,7 +8629,8 @@ function global:New-TuiDataTable {
                 $headerLines = if ($self.ShowHeader) { 3 } else { 0 }
                 $footerLines = if ($self.ShowFooter) { 2 } else { 0 }
                 $filterLines = if ($self.AllowFilter) { 2 } else { 0 }
-                $self.PageSize = $self.Height - $headerLines - $footerLines - $filterLines - 2
+                $borderAdjust = if ($self.ShowBorder) { 2 } else { 0 }
+                $self.PageSize = $self.Height - $headerLines - $footerLines - $filterLines - $borderAdjust
             }
             
             # Adjust current page
@@ -8208,37 +8643,62 @@ function global:New-TuiDataTable {
         Render = {
             param($self)
             
+            # Debug: Check data state for Quick Actions
+            if ($self.Title -eq "Quick Actions") {
+                Write-Log -Level Debug -Message "Rendering Quick Actions DataTable:"
+                Write-Log -Level Debug -Message "  Data count: $($self.Data.Count)"
+                Write-Log -Level Debug -Message "  ProcessedData count: $($self.ProcessedData.Count)"
+                if ($self.ProcessedData.Count -gt 0) {
+                    Write-Log -Level Debug -Message "  First row: $($self.ProcessedData[0] | ConvertTo-Json -Compress)"
+                }
+                $colInfo = $self.Columns | ForEach-Object { "$($_.Name):$($_.CalculatedWidth)" }
+                Write-Log -Level Debug -Message "  Columns: $($colInfo -join ', ')"
+            }
+            
             # Process data first
             & $self.ProcessData -self $self
             
-            $borderColor = if ($self.IsFocusable -and $self.IsFocused) { 
-                Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan)
-            } else { 
-                Get-ThemeColor "Border" -Default ([ConsoleColor]::DarkGray)
+            # Only draw border if ShowBorder is true
+            $contentX = $self.X
+            $contentY = $self.Y
+            $contentWidth = $self.Width
+            $contentHeight = $self.Height
+            
+            if ($self.ShowBorder) {
+                $borderColor = if ($self.IsFocusable -and $self.IsFocused) { 
+                    Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan)
+                } else { 
+                    Get-ThemeColor "Border" -Default ([ConsoleColor]::DarkGray)
+                }
+                
+                Write-BufferBox -X $self.X -Y $self.Y -Width $self.Width -Height $self.Height `
+                    -BorderColor $borderColor -Title " $($self.Title ?? 'Data Table') "
+                
+                # Adjust content area for border
+                $contentX = $self.X + 1
+                $contentY = $self.Y + 1
+                $contentWidth = $self.Width - 2
+                $contentHeight = $self.Height - 2
             }
             
-            # Container
-            Write-BufferBox -X $self.X -Y $self.Y -Width $self.Width -Height $self.Height `
-                -BorderColor $borderColor -Title " $($self.Title ?? 'Data Table') "
-            
-            $currentY = $self.Y + 1
-            $innerWidth = $self.Width - 2
+            $currentY = $contentY
+            $innerWidth = $contentWidth
             
             # Filter bar
             if ($self.AllowFilter) {
-                $filterBg = if ($self.FilterText) { Get-ThemeColor "Warning" } else { Get-ThemeColor "Background" }
-                $filterFg = if ($self.FilterText) { Get-ThemeColor "Background" } else { Get-ThemeColor "Subtle" }
+                $filterBg = if ($self.FilterText) { Get-ThemeColor "Warning" -Default ([ConsoleColor]::Yellow) } else { Get-ThemeColor "Background" -Default ([ConsoleColor]::Black) }
+                $filterFg = if ($self.FilterText) { Get-ThemeColor "Background" -Default ([ConsoleColor]::Black) } else { Get-ThemeColor "Subtle" -Default ([ConsoleColor]::DarkGray) }
                 
-                Write-BufferString -X ($self.X + 2) -Y $currentY -Text "Filter: " -ForegroundColor (Get-ThemeColor "Primary")
+                Write-BufferString -X ($contentX + 1) -Y $currentY -Text "Filter: " -ForegroundColor (Get-ThemeColor "Primary" -Default ([ConsoleColor]::White))
                 
                 $filterDisplayText = if ($self.FilterText) { $self.FilterText } else { "Type to filter..." }
-                Write-BufferString -X ($self.X + 10) -Y $currentY -Text $filterDisplayText `
+                Write-BufferString -X ($contentX + 9) -Y $currentY -Text $filterDisplayText `
                     -ForegroundColor $filterFg -BackgroundColor $filterBg
                 
                 if ($self.FilterColumn) {
                     $colName = ($self.Columns | Where-Object { $_.Name -eq $self.FilterColumn }).Header ?? $self.FilterColumn
-                    Write-BufferString -X ($self.X + $self.Width - 20) -Y $currentY `
-                        -Text "Column: $colName" -ForegroundColor (Get-ThemeColor "Info")
+                    Write-BufferString -X ($contentX + $contentWidth - 19) -Y $currentY `
+                        -Text "Column: $colName" -ForegroundColor (Get-ThemeColor "Info" -Default ([ConsoleColor]::Blue))
                 }
                 
                 $currentY += 2
@@ -8247,7 +8707,8 @@ function global:New-TuiDataTable {
             # Calculate column widths
             $totalDefinedWidth = ($self.Columns | Where-Object { $_.Width } | Measure-Object -Property Width -Sum).Sum ?? 0
             $flexColumns = @($self.Columns | Where-Object { -not $_.Width })
-            $remainingWidth = $innerWidth - $totalDefinedWidth - ($self.ShowRowNumbers ? 5 : 0) - 2
+            $columnSeparators = [Math]::Max(0, $self.Columns.Count - 1)  # Space between columns
+            $remainingWidth = $innerWidth - $totalDefinedWidth - ($self.ShowRowNumbers ? 5 : 0) - $columnSeparators
             $flexWidth = if ($flexColumns.Count -gt 0) { [Math]::Floor($remainingWidth / $flexColumns.Count) } else { 0 }
             
             foreach ($col in $flexColumns) {
@@ -8259,12 +8720,12 @@ function global:New-TuiDataTable {
             
             # Header
             if ($self.ShowHeader) {
-                $headerX = $self.X + 1
+                $headerX = $contentX
                 
                 # Row number header
                 if ($self.ShowRowNumbers) {
                     Write-BufferString -X $headerX -Y $currentY -Text "#".PadRight(4) `
-                        -ForegroundColor (Get-ThemeColor "Header")
+                        -ForegroundColor (Get-ThemeColor "Header" -Default ([ConsoleColor]::Cyan))
                     $headerX += 5
                 }
                 
@@ -8281,7 +8742,9 @@ function global:New-TuiDataTable {
                     
                     # Truncate if needed
                     if ($headerText.Length -gt $width) {
-                        $headerText = $headerText.Substring(0, $width - 3) + "..."
+                        # FIX: Robust substring
+                        $maxLength = [Math]::Max(0, $width - 3)
+                        $headerText = $headerText.Substring(0, $maxLength) + "..."
                     }
                     
                     # Align header
@@ -8297,7 +8760,7 @@ function global:New-TuiDataTable {
                     }
                     
                     Write-BufferString -X $headerX -Y $currentY -Text $alignedText `
-                        -ForegroundColor (Get-ThemeColor "Header")
+                        -ForegroundColor (Get-ThemeColor "Header" -Default ([ConsoleColor]::Cyan))
                     
                     $headerX += $width + 1
                 }
@@ -8305,8 +8768,9 @@ function global:New-TuiDataTable {
                 $currentY++
                 
                 # Header separator
-                Write-BufferString -X ($self.X + 1) -Y $currentY `
-                    -Text ("─" * ($self.Width - 2)) -ForegroundColor $borderColor
+                $separatorColor = Get-ThemeColor "Border" -Default ([ConsoleColor]::DarkGray)
+                Write-BufferString -X $contentX -Y $currentY `
+                    -Text ("─" * $contentWidth) -ForegroundColor $separatorColor
                 $currentY++
             }
             
@@ -8316,7 +8780,7 @@ function global:New-TuiDataTable {
             
             for ($i = $startIdx; $i -le $endIdx; $i++) {
                 $row = $self.ProcessedData[$i]
-                $rowX = $self.X + 1
+                $rowX = $contentX
                 
                 # Selection highlighting
                 $isSelected = if ($self.MultiSelect) {
@@ -8325,19 +8789,19 @@ function global:New-TuiDataTable {
                     $i -eq $self.SelectedRow
                 }
                 
-                $rowBg = if ($isSelected) { Get-ThemeColor "Accent" } else { Get-ThemeColor "Background" }
-                $rowFg = if ($isSelected) { Get-ThemeColor "Background" } else { Get-ThemeColor "Primary" }
+                $rowBg = if ($isSelected) { Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan) } else { Get-ThemeColor "Background" -Default ([ConsoleColor]::Black) }
+                $rowFg = if ($isSelected) { Get-ThemeColor "Background" -Default ([ConsoleColor]::Black) } else { Get-ThemeColor "Primary" -Default ([ConsoleColor]::White) }
                 
                 # Clear row background if selected
                 if ($isSelected) {
-                    Write-BufferString -X $rowX -Y $currentY -Text (" " * ($self.Width - 2)) `
+                    Write-BufferString -X $rowX -Y $currentY -Text (" " * $contentWidth) `
                         -BackgroundColor $rowBg
                 }
                 
                 # Row number
                 if ($self.ShowRowNumbers) {
                     Write-BufferString -X $rowX -Y $currentY -Text ($i + 1).ToString().PadRight(4) `
-                        -ForegroundColor (Get-ThemeColor "Subtle") -BackgroundColor $rowBg
+                        -ForegroundColor (Get-ThemeColor "Subtle" -Default ([ConsoleColor]::DarkGray)) -BackgroundColor $rowBg
                     $rowX += 5
                 }
                 
@@ -8357,7 +8821,15 @@ function global:New-TuiDataTable {
                     
                     # Truncate if needed
                     if ($displayValue.Length -gt $width) {
-                        $displayValue = $displayValue.Substring(0, $width - 3) + "..."
+                        # FIX: Robust substring
+                        $maxLength = [Math]::Max(0, $width - 3)
+                        if ($maxLength -le 0) {
+                            Write-Log -Level Warning -Message "DataTable '$($self.Title)' column '$($col.Name)' width too small: $width (max length: $maxLength)"
+                            $displayValue = "..."
+                        } else {
+                            $displayValue = $displayValue.Substring(0, $maxLength) + "..."
+                        }
+                    }
                     }
                     
                     # Align value
@@ -8375,7 +8847,7 @@ function global:New-TuiDataTable {
                     # Determine color
                     $cellFg = if ($col.Color -and -not $isSelected) {
                         $colorName = & $col.Color $value $row
-                        Get-ThemeColor $colorName -Default $rowFg
+                        Get-ThemeColor $colorName -Default ([ConsoleColor]::White)
                     } else {
                         $rowFg
                     }
@@ -8396,15 +8868,15 @@ function global:New-TuiDataTable {
                 } else {
                     "No data to display"
                 }
-                $msgX = $self.X + [Math]::Floor(($self.Width - $emptyMessage.Length) / 2)
-                $msgY = $self.Y + [Math]::Floor($self.Height / 2)
+                $msgX = $contentX + [Math]::Floor(($contentWidth - $emptyMessage.Length) / 2)
+                $msgY = $contentY + [Math]::Floor($contentHeight / 2)
                 Write-BufferString -X $msgX -Y $msgY -Text $emptyMessage `
-                    -ForegroundColor (Get-ThemeColor "Subtle")
+                    -ForegroundColor (Get-ThemeColor "Subtle" -Default ([ConsoleColor]::DarkGray))
             }
             
             # Footer
             if ($self.ShowFooter) {
-                $footerY = $self.Y + $self.Height - 2
+                $footerY = $contentY + $contentHeight - 1
                 
                 # Status
                 $statusText = "$($self.ProcessedData.Count) rows"
@@ -8414,27 +8886,27 @@ function global:New-TuiDataTable {
                 if ($self.MultiSelect) {
                     $statusText += " | $($self.SelectedRows.Count) selected"
                 }
-                Write-BufferString -X ($self.X + 2) -Y $footerY -Text $statusText `
-                    -ForegroundColor (Get-ThemeColor "Subtle")
+                Write-BufferString -X ($contentX + 1) -Y $footerY -Text $statusText `
+                    -ForegroundColor (Get-ThemeColor "Subtle" -Default ([ConsoleColor]::DarkGray))
                 
                 # Pagination
                 if ($self.ProcessedData.Count -gt $self.PageSize) {
                     $totalPages = [Math]::Ceiling($self.ProcessedData.Count / [Math]::Max(1, $self.PageSize))
                     $pageText = "Page $($self.CurrentPage + 1)/$totalPages"
-                    Write-BufferString -X ($self.X + $self.Width - $pageText.Length - 2) -Y $footerY `
-                        -Text $pageText -ForegroundColor (Get-ThemeColor "Info")
+                    Write-BufferString -X ($contentX + $contentWidth - $pageText.Length - 1) -Y $footerY `
+                        -Text $pageText -ForegroundColor (Get-ThemeColor "Info" -Default ([ConsoleColor]::Blue))
                 }
                 
                 # Scrollbar
                 if ($self.ProcessedData.Count -gt $self.PageSize) {
-                    $scrollHeight = $self.Height - 6 - (if ($self.ShowHeader) { 2 } else { 0 }) - (if ($self.AllowFilter) { 2 } else { 0 })
+                    $scrollHeight = $contentHeight - 4 - (if ($self.ShowHeader) { 2 } else { 0 }) - (if ($self.AllowFilter) { 2 } else { 0 })
                     $scrollPos = [Math]::Floor(($self.SelectedRow / ($self.ProcessedData.Count - 1)) * ($scrollHeight - 1))
-                    $scrollX = $self.X + $self.Width - 1
+                    $scrollX = $contentX + $contentWidth - 1
                     
                     for ($i = 0; $i -lt $scrollHeight; $i++) {
                         $scrollY = $currentY - $scrollHeight + $i
                         $char = if ($i -eq $scrollPos) { "█" } else { "│" }
-                        $color = if ($i -eq $scrollPos) { Get-ThemeColor "Accent" } else { Get-ThemeColor "Subtle" }
+                        $color = if ($i -eq $scrollPos) { Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan) } else { Get-ThemeColor "Subtle" -Default ([ConsoleColor]::DarkGray) }
                         Write-BufferString -X $scrollX -Y $scrollY -Text $char -ForegroundColor $color
                     }
                 }
@@ -8801,8 +9273,8 @@ function global:New-TuiTreeView {
                 }
                 
                 # Colors
-                $fg = if ($isSelected) { Get-ThemeColor "Background" } else { Get-ThemeColor "Primary" }
-                $bg = if ($isSelected) { Get-ThemeColor "Accent" } else { Get-ThemeColor "Background" }
+                $fg = if ($isSelected) { Get-ThemeColor "Background" -Default ([ConsoleColor]::Black) } else { Get-ThemeColor "Primary" -Default ([ConsoleColor]::White) }
+                $bg = if ($isSelected) { Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan) } else { Get-ThemeColor "Background" -Default ([ConsoleColor]::Black) }
                 
                 # Clear line if selected
                 if ($isSelected) {
@@ -8832,7 +9304,7 @@ function global:New-TuiTreeView {
                 
                 for ($i = 0; $i -lt $scrollHeight; $i++) {
                     $char = if ($i -eq $scrollPos) { "█" } else { "│" }
-                    $color = if ($i -eq $scrollPos) { Get-ThemeColor "Accent" } else { Get-ThemeColor "Subtle" }
+                    $color = if ($i -eq $scrollPos) { Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan) } else { Get-ThemeColor "Subtle" -Default ([ConsoleColor]::DarkGray) }
                     Write-BufferString -X ($self.X + $self.Width - 2) -Y ($self.Y + 1 + $i) `
                         -Text $char -ForegroundColor $color
                 }

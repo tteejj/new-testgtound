@@ -13,7 +13,6 @@ function global:Get-TaskManagementScreen {
             categories = @("Work", "Personal", "Urgent", "Projects")
             showingForm = $false
             editingTaskId = $null
-            formData = @{}
             showHelp = $false
         }
         
@@ -83,13 +82,6 @@ function global:Get-TaskManagementScreen {
             param($screen)
             $screen.State.showingForm = $true
             $screen.State.editingTaskId = $null
-            $screen.State.formData = @{
-                title = ""
-                description = ""
-                category = "Work"
-                priority = "Medium"
-                dueDate = (Get-Date).AddDays(7).ToString("MM/dd/yy")
-            }
             
             # Update form components
             $screen.Components.formTitle.Text = ""
@@ -98,16 +90,41 @@ function global:Get-TaskManagementScreen {
             $screen.Components.formPriority.Value = "Medium"
             $screen.Components.formDueDate.Value = (Get-Date).AddDays(7)
             
-            # Show form components
-            foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
-                $screen.Components[$comp].Visible = $true
-            }
+            # Center the form panel
+            $formWidth = 60
+            $formHeight = 24
+            $screen.Components.formPanel.X = [Math]::Floor(($global:TuiState.BufferWidth - $formWidth) / 2)
+            $screen.Components.formPanel.Y = 6
+            $screen.Components.formPanel.Title = " New Task "
+            
+            # Show form panel
+            $screen.Components.formPanel.Visible = $true
+            
+            # Enable focus on form components
+            $screen.Components.formTitle.IsFocusable = $true
+            $screen.Components.formDescription.IsFocusable = $true
+            $screen.Components.formCategory.IsFocusable = $true
+            $screen.Components.formPriority.IsFocusable = $true
+            $screen.Components.formDueDate.IsFocusable = $true
+            $screen.Components.formSaveButton.IsFocusable = $true
+            $screen.Components.formCancelButton.IsFocusable = $true
             
             # Hide table
-            $screen.Components.taskTable.Visible = $false
+            if ($screen.Components.taskTable) {
+                $screen.Components.taskTable.Visible = $false
+                $screen.Components.taskTable.IsFocusable = $false
+                $screen.Components.taskTable.IsFocused = $false
+            }
             
             # Focus first field
             $screen.FocusedComponentName = 'formTitle'
+            $screen.Components.formTitle.IsFocused = $true
+            
+            # Update engine focus
+            if (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue) {
+                Set-ComponentFocus -Component $screen.Components.formTitle
+            }
+            
             Request-TuiRefresh
         }
         
@@ -118,13 +135,6 @@ function global:Get-TaskManagementScreen {
             
             $screen.State.showingForm = $true
             $screen.State.editingTaskId = $task.Id
-            $screen.State.formData = @{
-                title = $task.Title
-                description = $task.Description
-                category = $task.Category
-                priority = $task.Priority
-                dueDate = $task.DueDate
-            }
             
             # Update form components
             $screen.Components.formTitle.Text = $task.Title
@@ -133,44 +143,76 @@ function global:Get-TaskManagementScreen {
             $screen.Components.formPriority.Value = $task.Priority
             $screen.Components.formDueDate.Value = [DateTime]::Parse($task.DueDate)
             
-            # Show form components
-            foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
-                $screen.Components[$comp].Visible = $true
-            }
+            # Center the form panel
+            $formWidth = 60
+            $formHeight = 24
+            $screen.Components.formPanel.X = [Math]::Floor(($global:TuiState.BufferWidth - $formWidth) / 2)
+            $screen.Components.formPanel.Y = 6
+            $screen.Components.formPanel.Title = " Edit Task "
+            
+            # Show form panel
+            $screen.Components.formPanel.Visible = $true
+            
+            # Enable focus on form components
+            $screen.Components.formTitle.IsFocusable = $true
+            $screen.Components.formDescription.IsFocusable = $true
+            $screen.Components.formCategory.IsFocusable = $true
+            $screen.Components.formPriority.IsFocusable = $true
+            $screen.Components.formDueDate.IsFocusable = $true
+            $screen.Components.formSaveButton.IsFocusable = $true
+            $screen.Components.formCancelButton.IsFocusable = $true
             
             # Hide table
-            $screen.Components.taskTable.Visible = $false
+            if ($screen.Components.taskTable) {
+                $screen.Components.taskTable.Visible = $false
+                $screen.Components.taskTable.IsFocusable = $false
+                $screen.Components.taskTable.IsFocused = $false
+            }
             
             # Focus first field
             $screen.FocusedComponentName = 'formTitle'
+            $screen.Components.formTitle.IsFocused = $true
+            
+            # Update engine focus
+            if (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue) {
+                Set-ComponentFocus -Component $screen.Components.formTitle
+            }
+            
             Request-TuiRefresh
         }
         
         SaveTask = {
             param($screen)
-            $formData = $screen.State.formData
+            
+            # Get current values from form components
+            $title = $screen.Components.formTitle.Text
+            $description = $screen.Components.formDescription.Text
+            $category = $screen.Components.formCategory.Value
+            $priority = $screen.Components.formPriority.Value
+            $dueDate = $screen.Components.formDueDate.Value
+            
             $editingId = $screen.State.editingTaskId
             
             if ($editingId) {
                 # Update existing
                 $task = $screen.State.tasks | Where-Object { $_.Id -eq $editingId }
                 if ($task) {
-                    $task.Title = $formData.title
-                    $task.Description = $formData.description
-                    $task.Category = $formData.category
-                    $task.Priority = $formData.priority
-                    $task.DueDate = $formData.dueDate
+                    $task.Title = $title
+                    $task.Description = $description
+                    $task.Category = $category
+                    $task.Priority = $priority
+                    $task.DueDate = if ($dueDate -is [DateTime]) { $dueDate.ToString("MM/dd/yy") } else { $dueDate }
                 }
             } else {
                 # Add new
                 $newTask = @{
                     Id = [Guid]::NewGuid().ToString()
-                    Title = $formData.title
-                    Description = $formData.description
-                    Category = $formData.category
-                    Priority = $formData.priority
+                    Title = $title
+                    Description = $description
+                    Category = $category
+                    Priority = $priority
                     Status = "Active"
-                    DueDate = $formData.dueDate
+                    DueDate = if ($dueDate -is [DateTime]) { $dueDate.ToString("MM/dd/yy") } else { $dueDate }
                     Created = Get-Date
                     Completed = $null
                 }
@@ -185,13 +227,30 @@ function global:Get-TaskManagementScreen {
             param($screen)
             $screen.State.showingForm = $false
             
-            # Hide form components
-            foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
-                $screen.Components[$comp].Visible = $false
-            }
+            # Hide form panel
+            $screen.Components.formPanel.Visible = $false
+            
+            # Disable focus on form components
+            $screen.Components.formTitle.IsFocusable = $false
+            $screen.Components.formTitle.IsFocused = $false
+            $screen.Components.formDescription.IsFocusable = $false
+            $screen.Components.formDescription.IsFocused = $false
+            $screen.Components.formCategory.IsFocusable = $false
+            $screen.Components.formCategory.IsFocused = $false
+            $screen.Components.formPriority.IsFocusable = $false
+            $screen.Components.formPriority.IsFocused = $false
+            $screen.Components.formDueDate.IsFocusable = $false
+            $screen.Components.formDueDate.IsFocused = $false
+            $screen.Components.formSaveButton.IsFocusable = $false
+            $screen.Components.formSaveButton.IsFocused = $false
+            $screen.Components.formCancelButton.IsFocusable = $false
+            $screen.Components.formCancelButton.IsFocused = $false
             
             # Show table
-            $screen.Components.taskTable.Visible = $true
+            if ($screen.Components.taskTable) {
+                $screen.Components.taskTable.Visible = $true
+                $screen.Components.taskTable.IsFocusable = $true
+            }
             $screen.FocusedComponentName = 'taskTable'
             Request-TuiRefresh
         }
@@ -229,7 +288,12 @@ function global:Get-TaskManagementScreen {
         Init = {
             param($self)
             
-            # Initialize sample tasks
+            # Try to load from global data first
+            if ($global:Data -and $global:Data.Tasks -and $global:Data.Tasks.Count -gt 0) {
+                $self.State.tasks = @($global:Data.Tasks | ForEach-Object { $_ })
+                Write-Log -Level Debug -Message "Loaded $($self.State.tasks.Count) tasks from global data"
+            } else {
+                # Initialize sample tasks
             $sampleTasks = @(
                 @{
                     Id = [Guid]::NewGuid().ToString()
@@ -266,7 +330,9 @@ function global:Get-TaskManagementScreen {
                 }
             )
             
-            $self.State.tasks = $sampleTasks
+                $self.State.tasks = $sampleTasks
+                Write-Log -Level Debug -Message "Using sample tasks data"
+            }
             
             # Create main task table
             $tableScreen = $self  # Capture reference for closure
@@ -308,58 +374,150 @@ function global:Get-TaskManagementScreen {
             
             # Form components (hidden by default)
             $formScreen = $self  # Capture reference for closures
+            
+            # Create form panel that will contain all form elements
+            $self.Components.formPanel = New-TuiPanel -Props @{
+                X = 0; Y = 0; Width = 60; Height = 24  # Will be positioned when shown
+                Layout = 'Stack'
+                Orientation = 'Vertical' 
+                Spacing = 1
+                Padding = 2
+                ShowBorder = $true
+                Title = " Task Form "
+                Visible = $false
+            }
+            
+            # Title label and textbox in a row
+            $titleRow = New-TuiPanel -Props @{
+                Width = 56; Height = 4
+                Layout = 'Stack'
+                Orientation = 'Vertical'
+                Spacing = 0
+                Padding = 0
+            }
+            $titleLabel = New-TuiLabel -Props @{ Text = "Title:"; Width = 50 }
             $self.Components.formTitle = New-TuiTextBox -Props @{
-                X = 25; Y = 10; Width = 54; Height = 3
+                Width = 54; Height = 3
                 Placeholder = "Enter task title..."
-                Visible = $false
-                OnChange = { param($self, $Key) $formScreen.State.formData.title = $self.Text }
+                IsFocusable = $false
             }
+            $titleRow.AddChild($titleRow, $titleLabel)
+            $titleRow.AddChild($titleRow, $self.Components.formTitle)
             
+            # Description label and textarea in a row
+            $descRow = New-TuiPanel -Props @{
+                Width = 56; Height = 6
+                Layout = 'Stack'
+                Orientation = 'Vertical'
+                Spacing = 0
+                Padding = 0
+            }
+            $descLabel = New-TuiLabel -Props @{ Text = "Description:"; Width = 50 }
             $self.Components.formDescription = New-TuiTextArea -Props @{
-                X = 25; Y = 14; Width = 54; Height = 5
+                Width = 54; Height = 5
                 Placeholder = "Enter task description..."
-                Visible = $false
-                OnChange = { param($self, $Key) $formScreen.State.formData.description = $self.Text }
+                IsFocusable = $false
+            }
+            $descRow.AddChild($descRow, $descLabel)
+            $descRow.AddChild($descRow, $self.Components.formDescription)
+            
+            # Category and Priority in horizontal layout
+            $categoryPriorityRow = New-TuiPanel -Props @{
+                Width = 56; Height = 4
+                Layout = 'Stack'
+                Orientation = 'Horizontal'
+                Spacing = 5
+                Padding = 0
             }
             
+            $categoryPanel = New-TuiPanel -Props @{
+                Width = 25; Height = 4
+                Layout = 'Stack'
+                Orientation = 'Vertical'
+                Spacing = 0
+                Padding = 0
+            }
+            $categoryLabel = New-TuiLabel -Props @{ Text = "Category:"; Width = 20 }
             $self.Components.formCategory = New-TuiDropdown -Props @{
-                X = 25; Y = 20; Width = 20; Height = 3
+                Width = 20; Height = 3
                 Options = $self.State.categories | ForEach-Object { @{ Display = $_; Value = $_ } }
-                Visible = $false
-                OnChange = { param($NewValue) $formScreen.State.formData.category = $NewValue }
+                IsFocusable = $false
             }
+            $categoryPanel.AddChild($categoryPanel, $categoryLabel)
+            $categoryPanel.AddChild($categoryPanel, $self.Components.formCategory)
             
+            $priorityPanel = New-TuiPanel -Props @{
+                Width = 25; Height = 4
+                Layout = 'Stack'
+                Orientation = 'Vertical'
+                Spacing = 0
+                Padding = 0
+            }
+            $priorityLabel = New-TuiLabel -Props @{ Text = "Priority:"; Width = 20 }
             $self.Components.formPriority = New-TuiDropdown -Props @{
-                X = 50; Y = 20; Width = 20; Height = 3
+                Width = 20; Height = 3
                 Options = @(
                     @{ Display = "Critical"; Value = "Critical" }
                     @{ Display = "High"; Value = "High" }
                     @{ Display = "Medium"; Value = "Medium" }
                     @{ Display = "Low"; Value = "Low" }
                 )
-                Visible = $false
-                OnChange = { param($NewValue) $formScreen.State.formData.priority = $NewValue }
+                IsFocusable = $false
             }
+            $priorityPanel.AddChild($priorityPanel, $priorityLabel)
+            $priorityPanel.AddChild($priorityPanel, $self.Components.formPriority)
             
+            $categoryPriorityRow.AddChild($categoryPriorityRow, $categoryPanel)
+            $categoryPriorityRow.AddChild($categoryPriorityRow, $priorityPanel)
+            
+            # Due Date row
+            $dueDateRow = New-TuiPanel -Props @{
+                Width = 56; Height = 4
+                Layout = 'Stack'
+                Orientation = 'Vertical'
+                Spacing = 0
+                Padding = 0
+            }
+            $dueDateLabel = New-TuiLabel -Props @{ Text = "Due Date:"; Width = 50 }
             $self.Components.formDueDate = New-TuiDatePicker -Props @{
-                X = 25; Y = 24; Width = 20; Height = 3
-                Visible = $false
-                OnChange = { param($NewValue) $formScreen.State.formData.dueDate = $NewValue.ToString("MM/dd/yy") }
+                Width = 20; Height = 3
+                IsFocusable = $false
+            }
+            $dueDateRow.AddChild($dueDateRow, $dueDateLabel)
+            $dueDateRow.AddChild($dueDateRow, $self.Components.formDueDate)
+            
+            # Button row
+            $buttonRow = New-TuiPanel -Props @{
+                Width = 56; Height = 3
+                Layout = 'Stack'
+                Orientation = 'Horizontal'
+                Spacing = 5
+                Padding = 0
             }
             
             $self.Components.formSaveButton = New-TuiButton -Props @{
-                X = 30; Y = 28; Width = 15; Height = 3
+                Width = 15; Height = 3
                 Text = "Save"
-                Visible = $false
+                IsFocusable = $false
                 OnClick = { & $formScreen.SaveTask -screen $formScreen }
             }
             
             $self.Components.formCancelButton = New-TuiButton -Props @{
-                X = 50; Y = 28; Width = 15; Height = 3
+                Width = 15; Height = 3
                 Text = "Cancel"
-                Visible = $false
+                IsFocusable = $false
                 OnClick = { & $formScreen.HideForm -screen $formScreen }
             }
+            
+            $buttonRow.AddChild($buttonRow, $self.Components.formSaveButton)
+            $buttonRow.AddChild($buttonRow, $self.Components.formCancelButton)
+            
+            # Add all rows to form panel
+            $self.Components.formPanel.AddChild($self.Components.formPanel, $titleRow)
+            $self.Components.formPanel.AddChild($self.Components.formPanel, $descRow)
+            $self.Components.formPanel.AddChild($self.Components.formPanel, $categoryPriorityRow)
+            $self.Components.formPanel.AddChild($self.Components.formPanel, $dueDateRow)
+            $self.Components.formPanel.AddChild($self.Components.formPanel, $buttonRow)
         }
         
         # 4. Render: Draw the screen and its components
@@ -367,7 +525,7 @@ function global:Get-TaskManagementScreen {
             param($self)
             
             # Header
-            $headerColor = Get-ThemeColor "Header"
+            $headerColor = Get-ThemeColor "Header" -Default ([ConsoleColor]::Cyan)
             Write-BufferString -X 2 -Y 1 -Text "Task Management" -ForegroundColor $headerColor
             
             # Filter/Sort toolbar
@@ -390,31 +548,6 @@ function global:Get-TaskManagementScreen {
                 $color = if ($isSelected) { [ConsoleColor]::Yellow } else { [ConsoleColor]::White }
                 Write-BufferString -X $sortX -Y $toolbarY -Text "[$($option.Display)]" -ForegroundColor $color
                 $sortX += $option.Display.Length + 4
-            }
-            
-            # Form overlay
-            if ($self.State.showingForm) {
-                $formWidth = 60
-                $formHeight = 24
-                $formX = [Math]::Floor(($global:TuiState.BufferWidth - $formWidth) / 2)
-                $formY = 6
-                
-                # Form background
-                for ($y = $formY; $y -lt ($formY + $formHeight); $y++) {
-                    for ($x = $formX; $x -lt ($formX + $formWidth); $x++) {
-                        Write-BufferString -X $x -Y $y -Text " " -BackgroundColor ([ConsoleColor]::DarkGray)
-                    }
-                }
-                
-                $title = if ($self.State.editingTaskId) { "Edit Task" } else { "New Task" }
-                Write-BufferBox -X $formX -Y $formY -Width $formWidth -Height $formHeight -Title " $title " -BorderColor ([ConsoleColor]::Yellow)
-                
-                # Form labels
-                Write-BufferString -X ($formX + 3) -Y ($formY + 2) -Text "Title:" -ForegroundColor ([ConsoleColor]::White)
-                Write-BufferString -X ($formX + 3) -Y ($formY + 6) -Text "Description:" -ForegroundColor ([ConsoleColor]::White)
-                Write-BufferString -X ($formX + 3) -Y ($formY + 12) -Text "Category:" -ForegroundColor ([ConsoleColor]::White)
-                Write-BufferString -X ($formX + 28) -Y ($formY + 12) -Text "Priority:" -ForegroundColor ([ConsoleColor]::White)
-                Write-BufferString -X ($formX + 3) -Y ($formY + 16) -Text "Due Date:" -ForegroundColor ([ConsoleColor]::White)
             }
             
             # Help panel
@@ -493,9 +626,36 @@ function global:Get-TaskManagementScreen {
                     ([ConsoleKey]::Tab) {
                         # Cycle through form fields
                         $formFields = @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')
-                        $currentIndex = [array]::IndexOf($formFields, $self.FocusedComponentName)
-                        $nextIndex = ($currentIndex + 1) % $formFields.Count
-                        $self.FocusedComponentName = $formFields[$nextIndex]
+                        $visibleFields = $formFields | Where-Object { $self.Components[$_] -and $self.Components[$_].Visible }
+                        
+                        if ($visibleFields.Count -gt 0) {
+                            $currentIndex = [array]::IndexOf($visibleFields, $self.FocusedComponentName)
+                            if ($currentIndex -eq -1) { $currentIndex = 0 }
+                            
+                            if ($Key.Modifiers -band [ConsoleModifiers]::Shift) {
+                                # Shift+Tab - go backwards
+                                $nextIndex = ($currentIndex - 1 + $visibleFields.Count) % $visibleFields.Count
+                            } else {
+                                # Tab - go forwards
+                                $nextIndex = ($currentIndex + 1) % $visibleFields.Count
+                            }
+                            
+                            $self.FocusedComponentName = $visibleFields[$nextIndex]
+                            
+                            # Update component focus states
+                            foreach ($field in $formFields) {
+                                if ($self.Components[$field]) {
+                                    $self.Components[$field].IsFocused = ($field -eq $self.FocusedComponentName)
+                                }
+                            }
+                            
+                            # Update engine's focus tracking
+                            $focusedComponent = $self.Components[$self.FocusedComponentName]
+                            if ($focusedComponent -and (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue)) {
+                                Set-ComponentFocus -Component $focusedComponent
+                            }
+                        }
+                        
                         Request-TuiRefresh
                         return $true
                     }
@@ -598,9 +758,26 @@ function global:Get-TaskManagementScreen {
             
             return $false
         }
+        
+        # 6. Lifecycle Hooks
+        OnResume = {
+            param($self)
+            # Refresh tasks from global data when returning to screen
+            if ($global:Data -and $global:Data.Tasks) {
+                $self.State.tasks = @($global:Data.Tasks | ForEach-Object { $_ })
+                & $self.RefreshTaskTable -screen $self
+                Write-Log -Level Debug -Message "Refreshed tasks from global data: $($self.State.tasks.Count) tasks"
+            }
+            Request-TuiRefresh
+        }
     }
     
     return $screen
 }
 
-Export-ModuleMember -Function Get-TaskManagementScreen
+# Alias for compatibility
+function global:Get-TaskScreen {
+    return Get-TaskManagementScreen
+}
+
+Export-ModuleMember -Function Get-TaskManagementScreen, Get-TaskScreen

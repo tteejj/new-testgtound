@@ -54,6 +54,10 @@ function global:Get-DashboardScreen {
                     }
                     if ($screen.Components.activeTimers) {
                         $screen.Components.activeTimers.Data = $timerData
+                        # Force process data to refresh display
+                        if ($screen.Components.activeTimers.ProcessData) {
+                            & $screen.Components.activeTimers.ProcessData -self $screen.Components.activeTimers
+                        }
                     }
                     Write-Log -Level Debug -Message "Active timers updated: $($timerData.Count) timers"
                 }
@@ -79,6 +83,10 @@ function global:Get-DashboardScreen {
                     }
                     if ($screen.Components.todaysTasks) {
                         $screen.Components.todaysTasks.Data = $taskData | Sort-Object Priority, Description
+                        # Force process data to refresh display
+                        if ($screen.Components.todaysTasks.ProcessData) {
+                            & $screen.Components.todaysTasks.ProcessData -self $screen.Components.todaysTasks
+                        }
                     }
                     Write-Log -Level Debug -Message "Today's tasks updated: $($taskData.Count) tasks"
                 }
@@ -136,8 +144,9 @@ function global:Get-DashboardScreen {
                     $self.Components.quickActions = New-TuiDataTable -Props @{
                         X = 2; Y = 4; Width = 35; Height = 12
                         IsFocusable = $true
+                        ShowBorder = $false  # Parent screen draws the border
                         Columns = @(
-                            @{ Name = "Action"; Header = "Quick Actions"; Width = 30 }
+                            @{ Name = "Action"; Header = "Quick Actions" }  # Let width auto-calculate
                         )
                         Data = @(
                             @{ Action = "1. Add Time Entry" }
@@ -159,20 +168,92 @@ function global:Get-DashboardScreen {
                             switch ($SelectedIndex) {
                                 0 { if (Get-Command Get-TimeEntryFormScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimeEntryFormScreen) } }
                                 1 { if (Get-Command Get-TimerStartScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimerStartScreen) } }
-                                2 { if (Get-Command Get-TaskManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskManagementScreen) } }
+                                2 { if (Get-Command Get-TaskScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskScreen) } elseif (Get-Command Get-TaskManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskManagementScreen) } }
                                 3 { if (Get-Command Get-ProjectManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ProjectManagementScreen) } }
                                 4 { if (Get-Command Get-ReportsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ReportsScreen) } }
                                 5 { if (Get-Command Get-SettingsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-SettingsScreen) } }
                             }
                         }
                     }
+                    
+                    # Debug logging
+                    Write-Log -Level Debug -Message "Quick Actions DataTable created with data:"
+                    foreach ($item in $self.Components.quickActions.Data) {
+                        Write-Log -Level Debug -Message "  Action: '$($item.Action)' (Length: $($item.Action.Length))"
+                    }
+                    
                     # Force process data to ensure display
                     if ($self.Components.quickActions.ProcessData) {
                         & $self.Components.quickActions.ProcessData -self $self.Components.quickActions
+                        Write-Log -Level Debug -Message "ProcessedData count: $($self.Components.quickActions.ProcessedData.Count)"
+                        if ($self.Components.quickActions.ProcessedData.Count -gt 0) {
+                            Write-Log -Level Debug -Message "First processed item: $($self.Components.quickActions.ProcessedData[0] | ConvertTo-Json -Compress)"
+                        }
                     }
-                    Write-Log -Level Debug -Message "Quick Actions DataTable created"
+                    Write-Log -Level Debug -Message "Quick Actions DataTable ProcessData called"
                 } else {
                     Write-Log -Level Warning -Message "DataTable component not available, using basic rendering"
+                    # Fallback to simple rendering
+                    $self.Components.quickActions = @{
+                        Type = "QuickActionsList"
+                        X = 2; Y = 4; Width = 35; Height = 12
+                        IsFocusable = $true
+                        Visible = $true
+                        SelectedIndex = 0
+                        Items = @(
+                            "1. Add Time Entry"
+                            "2. Start Timer"
+                            "3. Manage Tasks"
+                            "4. Manage Projects"
+                            "5. View Reports"
+                            "6. Settings"
+                        )
+                        Render = {
+                            param($self)
+                            $y = $self.Y
+                            foreach ($i in 0..($self.Items.Count - 1)) {
+                                $item = $self.Items[$i]
+                                $fg = if ($self.IsFocused -and $i -eq $self.SelectedIndex) { 
+                                    Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan)
+                                } else { 
+                                    Get-ThemeColor "Primary" -Default ([ConsoleColor]::White)
+                                }
+                                Write-BufferString -X $self.X -Y $y -Text $item -ForegroundColor $fg
+                                $y++
+                            }
+                        }
+                        HandleInput = {
+                            param($self, $Key)
+                            switch ($Key.Key) {
+                                ([ConsoleKey]::UpArrow) {
+                                    if ($self.SelectedIndex -gt 0) {
+                                        $self.SelectedIndex--
+                                        Request-TuiRefresh
+                                    }
+                                    return $true
+                                }
+                                ([ConsoleKey]::DownArrow) {
+                                    if ($self.SelectedIndex -lt $self.Items.Count - 1) {
+                                        $self.SelectedIndex++
+                                        Request-TuiRefresh
+                                    }
+                                    return $true
+                                }
+                                ([ConsoleKey]::Enter) {
+                                    switch ($self.SelectedIndex) {
+                                        0 { if (Get-Command Get-TimeEntryFormScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimeEntryFormScreen) } }
+                                        1 { if (Get-Command Get-TimerStartScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimerStartScreen) } }
+                                        2 { if (Get-Command Get-TaskScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskScreen) } }
+                                        3 { if (Get-Command Get-ProjectManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ProjectManagementScreen) } }
+                                        4 { if (Get-Command Get-ReportsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ReportsScreen) } }
+                                        5 { if (Get-Command Get-SettingsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-SettingsScreen) } }
+                                    }
+                                    return $true
+                                }
+                            }
+                            return $false
+                        }
+                    }
                 }
                 
                 # Active Timers
@@ -180,6 +261,7 @@ function global:Get-DashboardScreen {
                     $self.Components.activeTimers = New-TuiDataTable -Props @{
                         X = 40; Y = 4; Width = 40; Height = 12
                         IsFocusable = $true
+                        ShowBorder = $false  # Parent screen draws the border
                         Columns = @(
                             @{ Name = "Project"; Header = "Project"; Width = 20 }
                             @{ Name = "Time"; Header = "Time"; Width = 10 }
@@ -191,6 +273,10 @@ function global:Get-DashboardScreen {
                         Title = "Active Timers"
                         ShowFooter = $false
                     }
+                    # Force process data to ensure display
+                    if ($self.Components.activeTimers.ProcessData) {
+                        & $self.Components.activeTimers.ProcessData -self $self.Components.activeTimers
+                    }
                     Write-Log -Level Debug -Message "Active Timers DataTable created"
                 }
                 
@@ -199,6 +285,7 @@ function global:Get-DashboardScreen {
                     $self.Components.todaysTasks = New-TuiDataTable -Props @{
                         X = 2; Y = 18; Width = 78; Height = 10
                         IsFocusable = $true
+                        ShowBorder = $false  # Parent screen draws the border
                         Columns = @(
                             @{ Name = "Priority"; Header = "Pri"; Width = 8 }
                             @{ Name = "Description"; Header = "Task"; Width = 50 }
@@ -210,6 +297,10 @@ function global:Get-DashboardScreen {
                         MultiSelect = $false
                         Title = "Today's Tasks"
                         ShowFooter = $false
+                    }
+                    # Force process data to ensure display
+                    if ($self.Components.todaysTasks.ProcessData) {
+                        & $self.Components.todaysTasks.ProcessData -self $self.Components.todaysTasks
                     }
                     Write-Log -Level Debug -Message "Today's Tasks DataTable created"
                 }
@@ -257,7 +348,7 @@ function global:Get-DashboardScreen {
                 }
                 
                 # Header
-                $headerColor = Get-ThemeColor "Header"
+                $headerColor = Get-ThemeColor "Header" -Default ([ConsoleColor]::Cyan)
                 $currentTime = Get-Date -Format 'dddd, MMMM dd, yyyy HH:mm:ss'
                 Write-BufferString -X 2 -Y 1 -Text "PMC Terminal Dashboard - $currentTime" -ForegroundColor $headerColor
                 
@@ -269,10 +360,10 @@ function global:Get-DashboardScreen {
                 }
                 
                 # Draw boxes for organization
-                Write-BufferBox -X 1 -Y 3 -Width 37 -Height 14 -Title " Quick Actions " -BorderColor (Get-ThemeColor "Accent")
-                Write-BufferBox -X 39 -Y 3 -Width 42 -Height 14 -Title " Active Timers " -BorderColor (Get-ThemeColor "Info")
-                Write-BufferBox -X 83 -Y 3 -Width 20 -Height 14 -Title " Stats " -BorderColor (Get-ThemeColor "Success")
-                Write-BufferBox -X 1 -Y 17 -Width 80 -Height 12 -Title " Today's Tasks " -BorderColor (Get-ThemeColor "Warning")
+                Write-BufferBox -X 1 -Y 3 -Width 37 -Height 14 -Title " Quick Actions " -BorderColor (Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan))
+                Write-BufferBox -X 39 -Y 3 -Width 42 -Height 14 -Title " Active Timers " -BorderColor (Get-ThemeColor "Info" -Default ([ConsoleColor]::Blue))
+                Write-BufferBox -X 83 -Y 3 -Width 20 -Height 14 -Title " Stats " -BorderColor (Get-ThemeColor "Success" -Default ([ConsoleColor]::Green))
+                Write-BufferBox -X 1 -Y 17 -Width 80 -Height 12 -Title " Today's Tasks " -BorderColor (Get-ThemeColor "Warning" -Default ([ConsoleColor]::Yellow))
                 
                 # Render all components
                 foreach ($kvp in $self.Components.GetEnumerator()) {
@@ -287,7 +378,7 @@ function global:Get-DashboardScreen {
                 }
                 
                 # Status bar
-                $subtleColor = Get-ThemeColor "Subtle"
+                $subtleColor = Get-ThemeColor "Subtle" -Default ([ConsoleColor]::DarkGray)
                 $statusY = $global:TuiState.BufferHeight - 2
                 Write-BufferString -X 2 -Y $statusY -Text "Tab: Switch Focus • Enter: Select • R: Refresh • Q: Quit • F12: Debug Log" -ForegroundColor $subtleColor
                 
@@ -370,7 +461,7 @@ function global:Get-DashboardScreen {
                     switch ($index) {
                         0 { if (Get-Command Get-TimeEntryFormScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimeEntryFormScreen) } }
                         1 { if (Get-Command Get-TimerStartScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimerStartScreen) } }
-                        2 { if (Get-Command Get-TaskManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskManagementScreen) } }
+                        2 { if (Get-Command Get-TaskScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskScreen) } elseif (Get-Command Get-TaskManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskManagementScreen) } }
                         3 { if (Get-Command Get-ProjectManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ProjectManagementScreen) } }
                         4 { if (Get-Command Get-ReportsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ReportsScreen) } }
                         5 { if (Get-Command Get-SettingsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-SettingsScreen) } }

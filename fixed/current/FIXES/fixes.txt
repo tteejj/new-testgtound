@@ -1,0 +1,30 @@
+# TUI Framework Fixes Log
+
+## June 14, 2025 23:30
+- ForegroundColor null: Added -Default parameter to Get-ThemeColor calls
+- Quick Actions disappearing: Added ProcessData calls after DataTable creation
+- Task form navigation: Added IsFocusable management with Visible property
+
+## June 15, 2025
+- Dashboard Quick Actions showing "...": Need to check data initialization
+- Task form Tab navigation broken: Focus management issue in form components
+- Property 'title' error: Case sensitivity issue in task state access
+
+## June 15, 2025 - Fixes Applied
+- Quick Actions truncation: Reduced column width from 30 to 28 (table width 35)
+- Task form property error: Removed formData state, read directly from components
+- Tab navigation: Enhanced focus management with proper component state updates
+- Focus tracking: Added Set-ComponentFocus calls to sync with engine
+
+## June 15, 2025 - Decision Point
+- Data still not displaying in tables - deeper issue in DataTable render
+- Form components render outside border - needs layout management
+- DECISION: Stop bandaid fixes, proceed with integration plan
+- Next: Integrate panel component, fix DataTable, implement state management
+
+## June 15, 2025 - Integration Progress
+- Panel component: INTEGRATED into tui-components.psm1
+- Task form: UPDATED to use panels for automatic layout
+- OnResume hook: ADDED to task screen for data refresh
+- DataTable issue: Column width calculation adjusted, still investigating
+- Debug logging: Added to trace DataTable rendering issues
