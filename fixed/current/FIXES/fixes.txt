@@ -28,3 +28,30 @@
 - OnResume hook: ADDED to task screen for data refresh
 - DataTable issue: Column width calculation adjusted, still investigating
 - Debug logging: Added to trace DataTable rendering issues
+
+## June 15, 2025 10:05 - Critical Fixes
+- IsFocused error: Components created as PSCustomObject don't allow property assignment
+- AddChild error: Panel methods not accessible on PSCustomObject
+- Fix: Convert components to hashtables to allow dynamic property assignment
+
+## June 15, 2025 10:10 - Fixes Applied
+- Changed all component factories to return hashtables instead of PSCustomObject
+- Fixed Panel component to work as hashtable with callable methods
+- Updated task screen to call Panel methods using & operator
+- This allows IsFocused property to be set dynamically on components
+- Fixed all 13 component types including Chart component
+- Result: Dashboard and Task screens should render without property assignment errors
+
+## June 15, 2025 10:20 - Task Form Panel Issues
+- Issue: Form components not rendering inside panel
+- Added ShowBorder = false to child panels to avoid nested borders
+- Added layout recalculation after panel positioning in ShowAddTaskForm
+- Added debug logging to Panel render (with checks for Write-Log existence)
+- Fix: Call _RecalculateLayout after setting panel position
+
+## June 15, 2025 10:30 - Simplified Task Form
+- Issue: Complex nested panels causing rendering issues
+- Removed nested panels, add components directly to form panel
+- Increased form panel height from 24 to 30 for all components
+- Added all labels and inputs directly as children
+- Result: Form should now display all components properly
