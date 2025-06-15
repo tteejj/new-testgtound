@@ -12,6 +12,7 @@ function global:New-TuiDataTable {
         Y = $Props.Y ?? 0
         Width = $Props.Width ?? 80
         Height = $Props.Height ?? 20
+        Title = $Props.Title # <-- FIX: Added missing Title property
         Data = $Props.Data ?? @()
         Columns = $Props.Columns ?? @()
         SelectedRow = 0
@@ -51,25 +52,26 @@ function global:New-TuiDataTable {
         # }
         
         ProcessData = {
+            param($self)
             # Filter data
-            if ([string]::IsNullOrWhiteSpace($this.FilterText)) {
-                $this.FilteredData = $this.Data
+            if ([string]::IsNullOrWhiteSpace($self.FilterText)) {
+                $self.FilteredData = $self.Data
             } else {
-                if ($this.FilterColumn) {
+                if ($self.FilterColumn) {
                     # Filter specific column
-                    $this.FilteredData = @($this.Data | Where-Object {
-                        $value = $_."$($this.FilterColumn)"
-                        $value -and $value.ToString() -like "*$($this.FilterText)*"
+                    $self.FilteredData = @($self.Data | Where-Object {
+                        $value = $_."$($self.FilterColumn)"
+                        $value -and $value.ToString() -like "*$($self.FilterText)*"
                     })
                 } else {
                     # Filter all columns
-                    $this.FilteredData = @($this.Data | Where-Object {
+                    $self.FilteredData = @($self.Data | Where-Object {
                         $row = $_
                         $matched = $false
-                        foreach ($col in $this.Columns) {
+                        foreach ($col in $self.Columns) {
                             if ($col.Filterable -ne $false) {
                                 $value = $row."$($col.Name)"
-                                if ($value -and $value.ToString() -like "*$($this.FilterText)*") {
+                                if ($value -and $value.ToString() -like "*$($self.FilterText)*") {
                                     $matched = $true
                                     break
                                 }
@@ -81,29 +83,29 @@ function global:New-TuiDataTable {
             }
             
             # Sort data
-            if ($this.SortColumn -and $this.AllowSort) {
-                $this.ProcessedData = $this.FilteredData | Sort-Object -Property $this.SortColumn -Descending:($this.SortDirection -eq "Descending")
+            if ($self.SortColumn -and $self.AllowSort) {
+                $self.ProcessedData = $self.FilteredData | Sort-Object -Property $self.SortColumn -Descending:($self.SortDirection -eq "Descending")
             } else {
-                $this.ProcessedData = $this.FilteredData
+                $self.ProcessedData = $self.FilteredData
             }
             
             # Reset selection if needed
-            if ($this.SelectedRow -ge $this.ProcessedData.Count) {
-                $this.SelectedRow = [Math]::Max(0, $this.ProcessedData.Count - 1)
+            if ($self.SelectedRow -ge $self.ProcessedData.Count) {
+                $self.SelectedRow = [Math]::Max(0, $self.ProcessedData.Count - 1)
             }
             
             # Calculate page size if auto
-            if ($this.PageSize -eq 0) {
-                $headerLines = if ($this.ShowHeader) { 3 } else { 0 }
-                $footerLines = if ($this.ShowFooter) { 2 } else { 0 }
-                $filterLines = if ($this.AllowFilter) { 2 } else { 0 }
-                $this.PageSize = $this.Height - $headerLines - $footerLines - $filterLines - 2
+            if ($self.PageSize -eq 0) {
+                $headerLines = if ($self.ShowHeader) { 3 } else { 0 }
+                $footerLines = if ($self.ShowFooter) { 2 } else { 0 }
+                $filterLines = if ($self.AllowFilter) { 2 } else { 0 }
+                $self.PageSize = $self.Height - $headerLines - $footerLines - $filterLines - 2
             }
             
             # Adjust current page
-            $totalPages = [Math]::Ceiling($this.ProcessedData.Count / [Math]::Max(1, $this.PageSize))
-            if ($this.CurrentPage -ge $totalPages) {
-                $this.CurrentPage = [Math]::Max(0, $totalPages - 1)
+            $totalPages = [Math]::Ceiling($self.ProcessedData.Count / [Math]::Max(1, $self.PageSize))
+            if ($self.CurrentPage -ge $totalPages) {
+                $self.CurrentPage = [Math]::Max(0, $totalPages - 1)
             }
         }
         
@@ -111,7 +113,7 @@ function global:New-TuiDataTable {
             param($self)
             
             # Process data first
-            & $self.ProcessData
+            & $self.ProcessData -self $self
             
             $borderColor = if ($self.IsFocusable -and $self.IsFocused) { 
                 Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan)
@@ -183,7 +185,9 @@ function global:New-TuiDataTable {
                     
                     # Truncate if needed
                     if ($headerText.Length -gt $width) {
-                        $headerText = $headerText.Substring(0, $width - 3) + "..."
+                        # FIX: Robust substring
+                        $maxLength = [Math]::Max(0, $width - 3)
+                        $headerText = $headerText.Substring(0, $maxLength) + "..."
                     }
                     
                     # Align header
@@ -259,7 +263,9 @@ function global:New-TuiDataTable {
                     
                     # Truncate if needed
                     if ($displayValue.Length -gt $width) {
-                        $displayValue = $displayValue.Substring(0, $width - 3) + "..."
+                        # FIX: Robust substring
+                        $maxLength = [Math]::Max(0, $width - 3)
+                        $displayValue = $displayValue.Substring(0, $maxLength) + "..."
                     }
                     
                     # Align value
@@ -363,7 +369,7 @@ function global:New-TuiDataTable {
                                 $currentIdx = [array]::IndexOf($sortableCols.Name, $self.SortColumn)
                                 $nextIdx = ($currentIdx + 1) % $sortableCols.Count
                                 $self.SortColumn = $sortableCols[$nextIdx].Name
-                                & $self.ProcessData
+                                & $self.ProcessData -self $self
                                 Request-TuiRefresh
                             }
                         }
@@ -397,14 +403,14 @@ function global:New-TuiDataTable {
                     }
                     ([ConsoleKey]::Enter) {
                         $self.FilterMode = $false
-                        & $self.ProcessData
+                        & $self.ProcessData -self $self
                         Request-TuiRefresh
                         return $true
                     }
                     ([ConsoleKey]::Backspace) {
                         if ($self.FilterText.Length -gt 0) {
                             $self.FilterText = $self.FilterText.Substring(0, $self.FilterText.Length - 1)
-                            & $self.ProcessData
+                            & $self.ProcessData -self $self
                             Request-TuiRefresh
                         }
                         return $true
@@ -412,7 +418,7 @@ function global:New-TuiDataTable {
                     default {
                         if ($Key.KeyChar -and -not [char]::IsControl($Key.KeyChar)) {
                             $self.FilterText += $Key.KeyChar
-                            & $self.ProcessData
+                            & $self.ProcessData -self $self
                             Request-TuiRefresh
                             return $true
                         }
@@ -496,7 +502,7 @@ function global:New-TuiDataTable {
                         } else {
                             $self.SortDirection = "Ascending"
                         }
-                        & $self.ProcessData
+                        & $self.ProcessData -self $self
                         Request-TuiRefresh
                     }
                     return $true
@@ -533,7 +539,7 @@ function global:New-TuiDataTable {
                                     $self.SortColumn = $col.Name
                                     $self.SortDirection = "Ascending"
                                 }
-                                & $self.ProcessData
+                                & $self.ProcessData -self $self
                                 Request-TuiRefresh
                             }
                         }
@@ -547,25 +553,23 @@ function global:New-TuiDataTable {
         
         # Public methods
         RefreshData = {
-            & $this.ProcessData
+            param($self)
+            & $self.ProcessData -self $self
             Request-TuiRefresh
         }
         
-        # Initialize data processing
-        & $component.ProcessData
-        
         SetFilter = {
-            param($FilterText, $FilterColumn)
-            $this.FilterText = $FilterText
-            $this.FilterColumn = $FilterColumn
-            & $this.ProcessData
+            param($self, $FilterText, $FilterColumn)
+            $self.FilterText = $FilterText
+            $self.FilterColumn = $FilterColumn
+            & $self.ProcessData -self $self
             Request-TuiRefresh
         }
         
         ExportData = {
-            param($Format = "CSV", $FilePath)
+            param($self, $Format = "CSV", $FilePath)
             
-            $exportData = if ($this.FilterText) { $this.ProcessedData } else { $this.Data }
+            $exportData = if ($self.FilterText) { $self.ProcessedData } else { $self.Data }
             
             switch ($Format.ToUpper()) {
                 "CSV" {
@@ -577,14 +581,14 @@ function global:New-TuiDataTable {
                 "HTML" {
                     # Simple HTML table export
                     $html = "<table border='1'><tr>"
-                    foreach ($col in $this.Columns) {
+                    foreach ($col in $self.Columns) {
                         $html += "<th>$($col.Header ?? $col.Name)</th>"
                     }
                     $html += "</tr>"
                     
                     foreach ($row in $exportData) {
                         $html += "<tr>"
-                        foreach ($col in $this.Columns) {
+                        foreach ($col in $self.Columns) {
                             $value = $row."$($col.Name)"
                             $html += "<td>$value</td>"
                         }
@@ -597,6 +601,9 @@ function global:New-TuiDataTable {
             }
         }
     }
+    
+    # Initialize data processing after component is created
+    & $component.ProcessData -self $component
     
     return $component
 }
@@ -633,6 +640,7 @@ function global:New-TuiTreeView {
         # }
         
         FlattenTree = {
+            param($self)
             $flattened = @()
             
             $processNode = {
@@ -641,7 +649,7 @@ function global:New-TuiTreeView {
                 $node.Parent = $Parent
                 $node.Level = $Level
                 
-                if ($this.ShowRoot -or $Level -gt 0) {
+                if ($self.ShowRoot -or $Level -gt 0) {
                     $flattened += $Node
                 }
                 
@@ -652,15 +660,15 @@ function global:New-TuiTreeView {
                 }
             }
             
-            & $processNode $this.RootNode 0 $null
-            $this.FlattenedNodes = $flattened
+            & $processNode $self.RootNode 0 $null
+            $self.FlattenedNodes = $flattened
         }
         
         Render = {
             param($self)
             
             # Flatten tree first
-            & $self.FlattenTree
+            & $self.FlattenTree -self $self
             
             $borderColor = if ($self.IsFocused) { 
                 Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan)
@@ -878,7 +886,7 @@ function global:New-TuiTreeView {
         
         # Public methods
         AddNode = {
-            param($ParentNode, $NewNode)
+            param($self, $ParentNode, $NewNode)
             if (-not $ParentNode.Children) {
                 $ParentNode.Children = @()
             }
@@ -888,18 +896,18 @@ function global:New-TuiTreeView {
         }
         
         RemoveNode = {
-            param($Node)
+            param($self, $Node)
             if ($Node.Parent) {
                 $Node.Parent.Children = @($Node.Parent.Children | Where-Object { $_ -ne $Node })
-                if ($this.SelectedNode -eq $Node) {
-                    $this.SelectedNode = $Node.Parent
+                if ($self.SelectedNode -eq $Node) {
+                    $self.SelectedNode = $Node.Parent
                 }
                 Request-TuiRefresh
             }
         }
         
         FindNode = {
-            param($Predicate)
+            param($self, $Predicate)
             
             $find = {
                 param($Node)
@@ -911,7 +919,7 @@ function global:New-TuiTreeView {
                 return $null
             }
             
-            return & $find $this.RootNode
+            return & $find $self.RootNode
         }
     }
     

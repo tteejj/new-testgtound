@@ -1,0 +1,24 @@
+FIXES LOG
+=========
+
+2025-06-14:
+1. PROBLEM: Syntax error in advanced-data-components.psm1 - missing closing brace
+   FIX: Moved ProcessData initialization outside component hashtable definition
+
+2. PROBLEM: Dashboard HandleInput missing closing brace for F12 condition
+   FIX: Added missing closing brace after F12 handling
+
+3. PROBLEM: Task screen using incorrect property names (.Rows instead of .ProcessedData)
+   FIX: Updated all references to use .ProcessedData which is what DataTable uses
+
+4. PROBLEM: Quick Actions menu items not displaying on dashboard
+   FIX: DataTable needs explicit process data call after init
+
+5. PROBLEM: Task list not showing when navigating to task screen
+   FIX: Need to ensure ProcessData is called on DataTable components
+
+6. PROBLEM: ProcessData method using $this but not receiving component context
+   FIX: Changed ProcessData to accept -self parameter and updated all calls
+
+7. PROBLEM: All DataTable and TreeView methods using $this without context
+   FIX: Updated all methods to accept -self parameter: ProcessData, RefreshData, SetFilter, ExportData, FlattenTree, AddNode, RemoveNode, FindNode

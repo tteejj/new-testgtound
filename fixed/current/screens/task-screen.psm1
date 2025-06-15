@@ -71,10 +71,10 @@ function global:Get-TaskManagementScreen {
         RefreshTaskTable = {
             param($screen)
             $tableData = & $screen.GetFilteredTasks -screen $screen
-            if ($screen.Components.taskTable.Data) {
-                $screen.Components.taskTable.Data = $tableData
-            } else {
-                $screen.Components.taskTable.Rows = $tableData
+            $screen.Components.taskTable.Data = $tableData
+            # Force process data to refresh the display
+            if ($screen.Components.taskTable.ProcessData) {
+                & $screen.Components.taskTable.ProcessData -self $screen.Components.taskTable
             }
             Request-TuiRefresh
         }
@@ -199,8 +199,8 @@ function global:Get-TaskManagementScreen {
         DeleteTask = {
             param($screen)
             $selectedRow = $screen.Components.taskTable.SelectedRow
-            if ($selectedRow -ge 0 -and $selectedRow -lt $screen.Components.taskTable.Rows.Count) {
-                $taskData = $screen.Components.taskTable.Rows[$selectedRow]
+            if ($selectedRow -ge 0 -and $selectedRow -lt $screen.Components.taskTable.ProcessedData.Count) {
+                $taskData = $screen.Components.taskTable.ProcessedData[$selectedRow]
                 $screen.State.tasks = @($screen.State.tasks | Where-Object { $_.Id -ne $taskData.Id })
                 & $screen.RefreshTaskTable -screen $screen
             }
@@ -209,8 +209,8 @@ function global:Get-TaskManagementScreen {
         ToggleTaskStatus = {
             param($screen)
             $selectedRow = $screen.Components.taskTable.SelectedRow
-            if ($selectedRow -ge 0 -and $selectedRow -lt $screen.Components.taskTable.Rows.Count) {
-                $taskData = $screen.Components.taskTable.Rows[$selectedRow]
+            if ($selectedRow -ge 0 -and $selectedRow -lt $screen.Components.taskTable.ProcessedData.Count) {
+                $taskData = $screen.Components.taskTable.ProcessedData[$selectedRow]
                 $task = $screen.State.tasks | Where-Object { $_.Id -eq $taskData.Id }
                 if ($task) {
                     if ($task.Status -eq "Active") {
@@ -269,66 +269,41 @@ function global:Get-TaskManagementScreen {
             $self.State.tasks = $sampleTasks
             
             # Create main task table
-            if (Get-Command New-TuiDataTable -ErrorAction SilentlyContinue) {
-                $tableScreen = $self  # Capture reference for closure
-                $self.Components.taskTable = New-TuiDataTable -Props @{
-                    X = 2; Y = 5; Width = 76; Height = 20
-                    Columns = @(
-                        @{ Name = "Status"; Header = "✓"; Width = 3 }
-                        @{ Name = "Priority"; Header = "Priority"; Width = 10 }
-                        @{ Name = "Title"; Header = "Title"; Width = 30 }
-                        @{ Name = "Category"; Header = "Category"; Width = 11 }
-                        @{ Name = "DueDate"; Header = "Due Date"; Width = 10 }
-                    )
-                    Data = & $self.GetFilteredTasks -screen $self
-                    AllowSort = $false  # We handle sorting ourselves
-                    AllowFilter = $false
-                    MultiSelect = $false
-                    OnRowSelect = {
-                        param($Row, $Index)
-                        # Toggle task status on Enter
-                        $task = $tableScreen.State.tasks | Where-Object { $_.Id -eq $Row.Id }
-                        if ($task) {
-                            if ($task.Status -eq "Active") {
-                                $task.Status = "Completed"
-                                $task.Completed = Get-Date
-                            } else {
-                                $task.Status = "Active"
-                                $task.Completed = $null
-                            }
-                            & $tableScreen.RefreshTaskTable -screen $tableScreen
+            $tableScreen = $self  # Capture reference for closure
+            $self.Components.taskTable = New-TuiDataTable -Props @{
+                X = 2; Y = 5; Width = 76; Height = 20
+                Columns = @(
+                    @{ Name = "Status"; Header = "✓"; Width = 3 }
+                    @{ Name = "Priority"; Header = "Priority"; Width = 10 }
+                    @{ Name = "Title"; Header = "Title"; Width = 30 }
+                    @{ Name = "Category"; Header = "Category"; Width = 11 }
+                    @{ Name = "DueDate"; Header = "Due Date"; Width = 10 }
+                )
+                Data = & $self.GetFilteredTasks -screen $self
+                AllowSort = $false  # We handle sorting ourselves
+                AllowFilter = $false
+                MultiSelect = $false
+                Title = "Tasks"
+                OnRowSelect = {
+                    param($SelectedData, $SelectedIndex)
+                    # Toggle task status on Enter
+                    $task = $tableScreen.State.tasks | Where-Object { $_.Id -eq $SelectedData.Id }
+                    if ($task) {
+                        if ($task.Status -eq "Active") {
+                            $task.Status = "Completed"
+                            $task.Completed = Get-Date
+                        } else {
+                            $task.Status = "Active"
+                            $task.Completed = $null
                         }
+                        & $tableScreen.RefreshTaskTable -screen $tableScreen
                     }
                 }
-            } else {
-                # Fallback to basic table
-                $tableScreen = $self  # Capture reference for closure
-                $self.Components.taskTable = New-TuiTable -Props @{
-                    X = 2; Y = 5; Width = 76; Height = 20
-                    Columns = @(
-                        @{ Name = "Status"; Header = "✓" }
-                        @{ Name = "Priority"; Header = "Priority" }
-                        @{ Name = "Title"; Header = "Title" }
-                        @{ Name = "Category"; Header = "Category" }
-                        @{ Name = "DueDate"; Header = "Due Date" }
-                    )
-                    Rows = & $self.GetFilteredTasks -screen $self
-                    OnRowSelect = {
-                        param($Row, $Index)
-                        # Toggle task status
-                        $task = $tableScreen.State.tasks | Where-Object { $_.Id -eq $Row.Id }
-                        if ($task) {
-                            if ($task.Status -eq "Active") {
-                                $task.Status = "Completed"
-                                $task.Completed = Get-Date
-                            } else {
-                                $task.Status = "Active"
-                                $task.Completed = $null
-                            }
-                            & $tableScreen.RefreshTaskTable -screen $tableScreen
-                        }
-                    }
-                }
+            }
+            
+            # Force process data to ensure display
+            if ($self.Components.taskTable.ProcessData) {
+                & $self.Components.taskTable.ProcessData -self $self.Components.taskTable
             }
             
             # Form components (hidden by default)
@@ -569,8 +544,8 @@ function global:Get-TaskManagementScreen {
                     }
                     'E' {
                         $selectedRow = $self.Components.taskTable.SelectedRow
-                        if ($selectedRow -ge 0 -and $selectedRow -lt $self.Components.taskTable.Rows.Count) {
-                            $taskData = $self.Components.taskTable.Rows[$selectedRow]
+                        if ($selectedRow -ge 0 -and $selectedRow -lt $self.Components.taskTable.ProcessedData.Count) {
+                            $taskData = $self.Components.taskTable.ProcessedData[$selectedRow]
                             & $self.ShowEditTaskForm -screen $self -taskId $taskData.Id
                         }
                         return $true

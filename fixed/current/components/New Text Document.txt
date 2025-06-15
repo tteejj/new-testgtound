@@ -1,0 +1,996 @@
+Root Cause Analysis
+Double Rendering: The DashboardScreen's Render function draws a Write-BufferBox with a title (e.g., "Quick Actions"). Then, it calls the Render function for the New-TuiDataTable component. That component's Render function also draws a Write-BufferBox with a title. The result is two nested boxes and two titles, one on top of the other.
+Data Not Appearing: The quickActions table data is still not showing. This is because the component is drawing its own box, which messes up the coordinate system for drawing the rows inside. The content is likely being drawn, but it's being drawn over by the nested box's border or outside the visible area.
+The architectural fix is to establish a clear separation of concerns: Screens should draw containers, and components should only draw their own content within the coordinates they are given. A component should not be responsible for drawing its own border unless it's explicitly designed to be a self-contained panel.
+The Fix: A More Composable Component
+We will modify the New-TuiDataTable component to make it more flexible. We'll add a ShowBorder property. If true, it will draw its own box (for standalone use). If false, it will skip drawing the box and just render its headers and rows, assuming the parent screen has already drawn a container for it.
+Here is the corrected code for advanced-data-components.psm1. and apply to the screen:# In screens\dashboard-screen-grid.psm1, inside Init = { ... }
+
+$self.Components.quickActions = New-TuiDataTable -Props @{
+    X = 2; Y = 4; Width = 35; Height = 12
+    IsFocusable = $true
+    ShowBorder = $false # <-- ADD THIS LINE
+    Columns = @(
+        @{ Name = "Action"; Header = "Quick Actions"; Width = 30 }
+    )
+    # ... rest of the properties
+}
+
+V1 Proposal:Of course. Let's dive deep into these two concepts. They are foundational to building complex, maintainable, and robust user interfaces, and they work together beautifully.
+You've moved past fixing simple bugs and are now looking at true architectural improvements. This is where the framework will really start to shine.
+1. Data Binding & State Management (The "Single Source of Truth")
+This is arguably the most important architectural shift you can make. It fundamentally changes how you think about your UI.
+The "Why" (The Problem We're Solving)
+Right now, your application logic is often mixed directly with your UI components. For example, a button's OnClick handler might directly change the text of a label component, like this:
+# The "Old" Way
+$label = New-TuiLabel -Props @{ Text = "Initial" }
+$button = New-TuiButton -Props @{
+    Text = "Click Me"
+    OnClick = {
+        $label.Text = "You clicked the button!" # <-- Direct UI Manipulation
+        Request-TuiRefresh
+    }
+}
+Use code with caution.
+Powershell
+This is simple, but it has major drawbacks as the app grows:
+Spaghetti Code: The button component now has a direct, hard-coded dependency on the label component. What if another component also needs to change the label's text? Or what if the label needs to be updated based on a timer? The logic becomes scattered and tangled.
+Brittleness: If you rename $label to $statusLabel, the button's OnClick handler breaks.
+Difficult to Debug: To understand why the label has its current text, you have to find every single piece of code in the entire screen that might have changed it.
+The "What" (The Concept)
+The core idea is to create a "Single Source of Truth" for your screen's data. This is a central, plain data object (we'll call it State) that holds all the information your UI needs to display.
+The UI becomes a pure reflection of the state. You never modify the UI directly. Instead, you modify the state, and the UI reacts to those changes automatically.
+This creates a clear, one-way data flow:
+User Input (e.g., a button click) triggers an event.
+The Event Handler's only job is to modify the State.
+The State object automatically notifies any part of the UI that is "listening" for that specific piece of data to change.
+The UI Components receive the notification and re-render themselves with the new data.
+The "How" (The Implementation)
+We'll use the Create-TuiState function from your tui-framework.psm1 module to make this happen.
+Let's refactor the simple button/label example above.
+File to Edit: A screen file, like demo-screen.psm1 or a new test screen.
+The "New" Way (Reactive and Decoupled):
+# In the screen's Init = { ... } block
+
+# 1. Create a reactive state object for the screen
+$self.State = Create-TuiState -InitialState @{
+    statusMessage = "Initial"
+}
+
+# 2. Create the Label. It doesn't know about the button.
+#    It only knows about the 'statusMessage' in the state.
+$self.Components.statusLabel = New-TuiLabel -Props @{
+    X = 10; Y = 5; Text = "Initial"
+}
+# The label SUBSCRIBES to changes in the state.
+$self.State.Subscribe("statusMessage", {
+    param($Event) # The event contains NewValue, OldValue, Path
+    # When 'statusMessage' changes, this code runs automatically.
+    $self.Components.statusLabel.Text = $Event.NewValue
+    Request-TuiRefresh
+})
+
+
+# 3. Create the Button. It doesn't know about the label.
+#    Its only job is to tell the state to change.
+$self.Components.clickButton = New-TuiButton -Props @{
+    X = 10; Y = 8; Text = "Click Me"
+    OnClick = {
+        # The button MUTATES the state. It does NOT touch the label.
+        $self.State.SetValue("statusMessage", "You clicked the button at $(Get-Date)")
+    }
+}
+Use code with caution.
+Powershell
+What did we gain?
+Decoupling: The button and the label are completely unaware of each other. The button just changes the state. The label just listens to the state. You could have ten other components all listening to statusMessage, and the button's code wouldn't need to change at all.
+Predictability: To know why the label has its text, you only need to look at one place: the statusMessage property in the $self.State object. The state becomes the definitive representation of your UI at any given moment.
+Testability: You can test your application's logic by simply changing the state and asserting that the correct things happen, without ever needing to render the UI.
+2. Component Composition & Layouts (Building with LEGOs)
+This concept tackles the "magic number" problem of manually calculating X and Y coordinates. It allows you to build complex UIs by nesting components inside containers that manage the layout for you.
+The "Why" (The Problem We're Solving)
+Your current screens look like this:
+# The "Old" Way
+$self.Components.usernameLabel = New-TuiLabel -Props @{ X = 5; Y = 5; ... }
+$self.Components.usernameInput = New-TuiTextBox -Props @{ X = 20; Y = 5; ... }
+
+$self.Components.passwordLabel = New-TuiLabel -Props @{ X = 5; Y = 7; ... }
+$self.Components.passwordInput = New-TuiTextBox -Props @{ X = 20; Y = 7; ... }
+Use code with caution.
+Powershell
+This is a maintenance nightmare:
+Fragile: If you decide usernameLabel should be wider, you have to manually change the X coordinate of usernameInput.
+Tedious: Adding a new field in the middle means you have to recalculate the Y coordinate of every single component below it.
+Not Reusable: This layout logic is stuck inside this one screen. You can't easily reuse this "label + input" form layout elsewhere.
+The "What" (The Concept)
+We will create a new type of component: a Container. A container's primary job is not to display something itself, but to contain and arrange its children. We'll call our first container New-TuiPanel.
+This panel will have a Layout property (e.g., 'Stack', 'Grid') and an AddChild() method. When the panel is rendered, it will first calculate the positions of all its children based on the layout mode, and then it will call the Render method for each child.
+This allows you to build UIs declaratively: "I want a vertical stack of these three components," instead of "I want component A at Y=5, component B at Y=9, component C at Y=13..."
+The "How" (The Implementation)
+First, we need to create the New-TuiPanel component factory.
+File to Create/Edit: components/tui-components.psm1 (or a new container-components.psm1)
+# Add this new function to your component library
+function global:New-TuiPanel {
+    param([hashtable]$Props = @{})
+
+    $component = @{
+        # Metadata
+        Type = "Panel"
+        IsFocusable = $false # Panels themselves aren't focusable, their children are
+
+        # Properties
+        X = $Props.X ?? 0
+        Y = $Props.Y ?? 0
+        Width = $Props.Width ?? 40
+        Height = $Props.Height ?? 20
+        Visible = $Props.Visible ?? $true
+        Children = @()
+
+        # Layout Properties
+        Layout = $Props.Layout ?? 'Stack' # 'Stack', 'Grid', 'Dock'
+        Spacing = $Props.Spacing ?? 1
+        Padding = $Props.Padding ?? 1
+
+        # Methods
+        AddChild = {
+            param($self, $ChildComponent)
+            $self.Children += $ChildComponent
+        }
+
+        Render = {
+            param($self)
+            if (-not $self.Visible) { return }
+
+            # 1. Apply the layout to position the children
+            $currentX = $self.X + $self.Padding
+            $currentY = $self.Y + $self.Padding
+
+            foreach ($child in $self.Children) {
+                if (-not $child.Visible) { continue }
+
+                # This is a simplified Stack layout for demonstration
+                $child.X = $currentX
+                $child.Y = $currentY
+
+                $currentY += $child.Height + $self.Spacing
+            }
+
+            # 2. Render the children now that they are positioned
+            foreach ($child in $self.Children) {
+                if ($child.Render) {
+                    # Pass focus state down to the child
+                    $child.IsFocused = $self.IsFocused -and ($global:TuiState.FocusedComponent -eq $child)
+                    & $child.Render -self $child
+                }
+            }
+        }
+
+        # A panel passes input handling to its children
+        HandleInput = {
+            param($self, $Key)
+            # In a real implementation, this would delegate to the focused child.
+            # For now, we let the screen's global handler manage it.
+            return $false
+        }
+    }
+    return $component
+}
+Use code with caution.
+Powershell
+Now, let's refactor our form example using this new panel.
+The "New" Way (Declarative and Maintainable):
+# In the screen's Init = { ... } block
+
+# 1. Create the child components. They don't need X/Y coordinates anymore!
+$usernameLabel = New-TuiLabel -Props @{ Text = "Username:" }
+$usernameInput = New-TuiTextBox -Props @{ Width = 30 }
+$passwordLabel = New-TuiLabel -Props @{ Text = "Password:" }
+$passwordInput = New-TuiTextBox -Props @{ Width = 30 }
+$submitButton = New-TuiButton -Props @{ Text = "Login" }
+
+# 2. Create a Panel to manage their layout.
+$self.Components.loginForm = New-TuiPanel -Props @{
+    X = 10; Y = 5; Width = 40; Height = 20
+    Layout = 'Stack' # Use the vertical stack layout
+    Spacing = 1      # 1 line of space between components
+}
+
+# 3. Add the children to the panel IN THE ORDER you want them to appear.
+$self.Components.loginForm.AddChild($self.Components.loginForm, $usernameLabel)
+$self.Components.loginForm.AddChild($self.Components.loginForm, $usernameInput)
+$self.Components.loginForm.AddChild($self.Components.loginForm, $passwordLabel)
+$self.Components.loginForm.AddChild($self.Components.loginForm, $passwordInput)
+$self.Components.loginForm.AddChild($self.Components.loginForm, $submitButton)
+
+# The screen's Render function now only needs to render the panel.
+# The panel handles the rest.
+Use code with caution.
+Powershell
+Now, if you want to add a "Confirm Password" field, you just create the two components and insert them into the AddChild sequence. You don't have to touch a single X or Y coordinate. The panel handles it all.
+Putting It All Together: The Synergy
+These two concepts are powerful on their own, but they are transformative when combined. Imagine a screen that uses both:
+The screen's Init creates a State object for its data.
+It then creates a master Panel to control the overall layout.
+It creates child components (buttons, text boxes, tables).
+These child components subscribe to the State.
+The child components are added to the Panel.
+The button's OnClick handler mutates the State.
+The table, which is subscribed to the same state, sees the change and automatically updates its data.
+The Panel ensures everything stays perfectly aligned, regardless of the data changes.
+This creates a clean, robust, and scalable architecture for your entire TUI application.
+
+V2 Proposal
+his proposal refines the foundational concepts of Data Binding & State Management and Component Composition & Layouts for a PowerShell-based TUI framework. It emphasizes practical, robust, and efficient patterns that improve maintainability, testability, and developer ergonomics without introducing unnecessary complexity.
+
+1. Data Binding & State Management: A True Single Source of Truth
+
+1.1 Why It Matters
+
+Clear Separation: Decouples application logic from presentation; UI components merely reflect data, never drive it.
+
+Predictable Flow: Every UI change follows a one-way, event → state mutation → render sequence.
+
+Testability: Business logic can be validated by manipulating state in isolation, without spinning up the UI.
+
+1.2 Core Abstractions
+
+State Object: Immutable snapshots or a reactive proxy that tracks minimal diffs.
+
+Selectors: Lightweight functions to derive computed values from raw state.
+
+Actions / Commands: Named handlers that accept parameters and return new state slices.
+
+1.3 Implementation Blueprint
+
+# 1. Define the state schema and initial values
+$self.State = New-TuiState -Schema @{
+    statusMessage = [string];
+    counter       = [int];
+}
+
+# 2. Register actions
+$self.State.RegisterAction('SetStatus', { param($state, $msg)
+    return $state | Merge-State -Updates @{ statusMessage = $msg }
+})
+$self.State.RegisterAction('Increment', { param($state)
+    return $state | Merge-State -Updates @{ counter = $state.counter + 1 }
+})
+
+# 3. Subscribe components to selectors
+$self.SetupBindings = {
+    $self.State.Subscribe('statusMessage', { param($evt) $self.RefreshLabel($evt.NewValue) })
+    $self.State.Select('counter', { $args[0] % 2 -eq 0 }) |
+        ForEach-Object { $self.ToggleHighlight() }
+}
+
+# 4. Trigger via UI
+$btn.OnClick = { $self.State.Dispatch('Increment') }
+
+Key Enhancements
+
+Immutable Updates with minimal diff tracking (Merge-State) reduce unnecessary re-renders.
+
+Named Actions provide discoverable, documentable command points instead of ad-hoc lambdas.
+
+Selectors & Derived Data avoid duplicating logic across subscribers.
+
+2. Component Composition & Responsive Layouts
+
+2.1 Why It Matters
+
+Declarative UIs: Define what you want, not where it goes.
+
+Reusable Patterns: Extract common layouts (e.g., forms, dialogs) into composable containers.
+
+Responsive Design: Allow UIs to adjust to terminal resizing or dynamic content changes.
+
+2.2 Core Container Engines
+
+StackPanel: Vertical or horizontal stacking with spacing and padding.
+
+GridPanel: Row/column definitions, spanning, and alignment.
+
+FlexPanel: Proportional sizing with grow/shrink behaviors.
+
+2.3 Implementation Blueprint
+
+# 1. Create containers
+$form = New-TuiForm -Props @{ Layout = 'Grid'; Rows = 0.2,0.2,0.6; Cols = 0.3,0.7 }
+
+# 2. Add components with layout metadata
+$form.AddChild($usernameLabel, @{ Row=0; Col=0; Align='Right' })
+$form.AddChild($usernameInput, @{ Row=0; Col=1; Flex=1 })
+$form.AddChild($passwordLabel, @{ Row=1; Col=0; Align='Right' })
+$form.AddChild($passwordInput, @{ Row=1; Col=1; Flex=1 })
+$form.AddChild($submitBtn, @{ Row=2; ColSpan=2; Align='Center' })
+
+# 3. Render handles positioning, resizing, focus traversal
+& $form.Render -self $form
+
+Key Enhancements
+
+Metadata-Driven Layout: Each child carries its own row/col/flex hints—no magic numbers.
+
+Responsive to Resize: Containers recompute child metrics on Terminal.Resize events.
+
+Focus Management: Panels delegate input to children in visual order, supporting keyboard navigation automatically.
+
+3. Performance & Efficiency Considerations
+
+Batching Updates: Queue multiple state mutations & render once per event loop tick.
+
+Virtualized Lists: Render only visible rows in large tables to reduce draw calls.
+
+Lazy Subscription: Defer setting up listeners until a component mounts.
+
+
+
+v3 Proposal
+Excellent. This is the perfect next step. The ChatGPT proposal contains the right *ideas* (selectors, declarative layouts, actions), but the implementation details are theoretical and don't fit the practical reality of your PowerShell-based engine.
+
+My goal is to take those powerful concepts and forge them into robust, idiomatic, and *usable* code that slots directly into your existing framework. We will make it better by making it real.
+
+Here is a deep dive into how we can evolve your framework, complete with production-ready code you can integrate immediately.
+
+---
+
+### 1. Data Binding & State Management: The Practical Evolution
+
+The core idea of a "Single Source of Truth" is correct, but the proposed implementation is too verbose and not idiomatic for PowerShell. We can achieve the same power with a cleaner, more object-oriented approach.
+
+**The Problem with the Proposal:**
+*   `-Schema`: PowerShell is dynamically typed. Enforcing a schema adds boilerplate without providing the compile-time safety it would in a language like C#.
+*   `RegisterAction` / `Dispatch`: This is a Redux pattern. It's powerful but can feel clunky in PowerShell. We can make it feel more natural.
+*   `Merge-State`: Implies complex immutability, which can be slow and difficult to manage in PowerShell without native support.
+
+**Our Better, Practical Solution:**
+
+We will create a **Reactive State Object**. This object will manage its own data and allow components to subscribe to changes. Actions will be methods *on the state object itself*, making them discoverable and easy to call.
+
+#### **The Code: An Upgraded `tui-framework.psm1`**
+
+Replace the contents of `tui-framework.psm1` with this. This is a non-destructive upgrade that enhances `Create-TuiState` and keeps your other functions.
+
+```powershell
+# TUI Framework Integration Module - ENHANCED VERSION
+# With advanced state management and practical utilities
+
+$script:TuiAsyncJobs = @()
+
+# --- Existing functions like Initialize-TuiFramework, Invoke-TuiAsync, etc. remain here ---
+# ... (I'm omitting them for brevity, but they should stay in the file)
+
+# --- ENHANCED STATE MANAGEMENT ---
+
+function global:New-TuiState {
+    <#
+    .SYNOPSIS
+    Creates a powerful, reactive state management object for a screen or component.
+    .DESCRIPTION
+    This is the heart of a robust UI. Instead of manually updating components, you
+    update the state, and any component subscribed to that state will update automatically.
+    .EXAMPLE
+    $State = New-TuiState -InitialState @{ count = 0 } -Actions @{
+        Increment = { $this.SetValue('count', $this.count + 1) }
+        Reset = { $this.SetValue('count', 0) }
+    }
+    $State.Subscribe('count', { param($newValue) Write-Host "Count is now $newValue" })
+    $State.Increment() # Triggers the subscriber
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [hashtable]$InitialState,
+        [hashtable]$Actions = @{}
+    )
+
+    $stateObject = [pscustomobject]@{
+        _data = $InitialState.Clone()
+        _subscribers = @{}
+    }
+
+    # Add a dynamic property for each key in the initial state for easy access (e.g., $State.count)
+    foreach ($key in $InitialState.Keys) {
+        $stateObject | Add-Member -MemberType ScriptProperty -Name $key -Value {
+            $this._data[$key]
+        } -SecondValue {
+            param($newValue)
+            # This setter is the key to reactivity
+            $this.SetValue($key, $newValue)
+        }
+    }
+
+    # --- Core Methods ---
+    $methods = @{
+        SetValue = {
+            param($key, $value)
+            $oldValue = $this._data[$key]
+            if (-not (Compare-TuiValue $oldValue $value)) {
+                $this._data[$key] = $value
+                $this._Notify($key, $value, $oldValue)
+            }
+        }
+
+        Update = {
+            param([hashtable]$updates)
+            foreach ($key in $updates.Keys) {
+                $this.SetValue($key, $updates[$key])
+            }
+        }
+
+        Subscribe = {
+            param($key, [scriptblock]$handler)
+            if (-not $this._subscribers.ContainsKey($key)) {
+                $this._subscribers[$key] = @()
+            }
+            $this._subscribers[$key] += $handler
+            # Immediately call the handler with the current value
+            try { & $handler $this._data[$key] } catch { Write-Warning "Initial state subscription failed: $_" }
+        }
+
+        Select = {
+            param($key, [scriptblock]$selector)
+            # Returns a new scriptblock that acts as a derived state subscription
+            return {
+                param([scriptblock]$handler)
+                $this.Subscribe($key, {
+                    param($newValue)
+                    $derivedValue = & $selector $newValue
+                    & $handler $derivedValue
+                })
+            }
+        }
+
+        _Notify = {
+            param($key, $newValue, $oldValue)
+            if ($this._subscribers.ContainsKey($key)) {
+                foreach ($handler in $this._subscribers[$key]) {
+                    try { & $handler $newValue $oldValue } catch { Write-Warning "State notification error for key '$key': $_" }
+                }
+            }
+            # Also notify wildcard subscribers
+            if ($this._subscribers.ContainsKey('*')) {
+                foreach ($handler in $this._subscribers['*']) {
+                    try { & $handler $key $newValue $oldValue } catch { Write-Warning "Wildcard state notification error: $_" }
+                }
+            }
+        }
+    }
+
+    # Add all methods to the state object
+    foreach ($kvp in $methods.GetEnumerator()) {
+        $stateObject | Add-Member -MemberType ScriptMethod -Name $kvp.Key -Value $kvp.Value
+    }
+
+    # Add user-defined actions as methods
+    foreach ($kvp in $Actions.GetEnumerator()) {
+        $stateObject | Add-Member -MemberType ScriptMethod -Name $kvp.Key -Value $kvp.Value
+    }
+
+    return $stateObject
+}
+
+# Keep the other functions from the original tui-framework.psm1 file here...
+# (Initialize-TuiFramework, Invoke-TuiAsync, etc.)
+# ...
+# And make sure the Export-ModuleMember includes New-TuiState
+Export-ModuleMember -Function @(
+    'Initialize-TuiFramework',
+    'Invoke-TuiAsync',
+    'Stop-AllTuiAsyncJobs',
+    'New-TuiState', # <-- ADD THIS
+    'Compare-TuiValue',
+    'Remove-TuiComponent',
+    'Invoke-TuiMethod'
+)
+```
+
+#### **How to Use It: A Clean, Reactive Screen**
+
+This is how you would refactor a screen (like `task-screen.psm1`) to use this new state management.
+
+```powershell
+# In task-screen.psm1
+
+function global:Get-TaskManagementScreen {
+    $screen = @{
+        Name = "TaskScreen"
+        
+        # State and Components are now initialized in the Init block
+        State = $null
+        Components = @{}
+
+        Init = {
+            param($self)
+
+            # 1. DEFINE STATE and ACTIONS
+            $self.State = New-TuiState -InitialState @{
+                tasks = @() # The raw task data
+                filteredTasks = @() # A derived list for the table
+                filter = "all"
+                sortBy = "priority"
+                formVisible = $false
+            } -Actions @{
+                SetFilter = { param($newFilter) $this.filter = $newFilter }
+                SetSort = { param($newSort) $this.sortBy = $newSort }
+                ToggleForm = { $this.formVisible = -not $this.formVisible }
+                AddTask = { param($taskData) $this.tasks = @($this.tasks) + $taskData }
+            }
+
+            # 2. CREATE COMPONENTS
+            $self.Components.taskTable = New-TuiDataTable -Props @{
+                X = 2; Y = 5; Width = 76; Height = 20
+                # ... (columns, etc.)
+            }
+            # ... other components ...
+
+            # 3. SETUP BINDINGS (The Magic)
+            # When 'tasks', 'filter', or 'sortBy' change, recalculate the filtered list
+            $self.State.Subscribe('*', {
+                # This is a simple way to react to any change
+                $tasks = $self.State.tasks
+                $filter = $self.State.filter
+                # ... (your filtering and sorting logic here) ...
+                $processed = # ... result of filtering/sorting
+                
+                # Update the derived state property. This will trigger the table's own subscription.
+                $self.State.filteredTasks = $processed
+            })
+
+            # The table component ONLY listens to the final, processed data
+            $self.State.Subscribe('filteredTasks', { param($newTasks)
+                $self.Components.taskTable.Data = $newTasks
+                Request-TuiRefresh
+            })
+
+            # The form visibility is also bound to the state
+            $self.State.Subscribe('formVisible', { param($isVisible)
+                # ... (logic to show/hide form components) ...
+                Request-TuiRefresh
+            })
+        }
+
+        HandleInput = {
+            param($self, $Key)
+            # Input handlers now just dispatch actions. They don't touch the UI.
+            switch ($Key.KeyChar.ToString().ToUpper()) {
+                '1' { $self.State.SetFilter("all") }
+                '2' { $self.State.SetFilter("active") }
+                'P' { $self.State.SetSort("priority") }
+                'N' { $self.State.ToggleForm() }
+            }
+            # ...
+        }
+        # ... (Render function remains largely the same)
+    }
+    return $screen
+}
+```
+
+---
+
+### 2. Component Composition & Responsive Layouts: The Practical Evolution
+
+The proposal for a `Grid` layout with fractional units is powerful but extremely complex to implement in a character-based grid. A more practical and equally powerful approach for TUIs is a combination of **Stacking** and a simplified **Grid** that uses fixed sizes and "star" (`*`) sizing for flexible columns.
+
+**The Problem with the Proposal:**
+*   Fractional units (`0.2`, `0.7`) are hard to calculate and lead to rounding errors with character cells.
+*   `New-TuiForm` is too specific. A generic `New-TuiPanel` is more reusable.
+
+**Our Better, Practical Solution:**
+
+We will create a single, powerful `New-TuiPanel` component. This container will manage its children using different layout modes. Its grid system will support three types of column/row definitions:
+1.  **`AutoSize` (`'Auto'`)**: The row/column will be just large enough to fit its content.
+2.  **`Fixed` (`20`)**: The row/column will be a fixed number of cells.
+3.  **`Star` (`'1*'`, `'2*'`)**: The row/column will take a proportional share of the *remaining* space.
+
+#### **The Code: A New `New-TuiPanel` Component**
+
+Add this new function to `components/tui-components.psm1`.
+
+```powershell
+# In components/tui-components.psm1
+
+function global:New-TuiPanel {
+    param([hashtable]$Props = @{})
+
+    $component = @{
+        Type = "Panel"
+        X = $Props.X ?? 0
+        Y = $Props.Y ?? 0
+        Width = $Props.Width ?? 40
+        Height = $Props.Height ?? 20
+        Visible = $Props.Visible ?? $true
+        Children = @()
+        ShowBorder = $Props.ShowBorder ?? $false
+        Title = $Props.Title
+
+        # Layout Properties
+        Layout = $Props.Layout ?? 'Stack' # 'Stack', 'Grid'
+        Spacing = $Props.Spacing ?? 1
+        Padding = $Props.Padding ?? 1
+        Orientation = $Props.Orientation ?? 'Vertical' # For Stack layout
+
+        # Grid-specific properties
+        ColumnDefinitions = $Props.ColumnDefinitions ?? @('1*') # e.g., @(5, '1*', '2*')
+        RowDefinitions = $Props.RowDefinitions ?? @('1*')
+
+        # Methods
+        AddChild = {
+            param($self, $ChildComponent, $LayoutMetadata = @{})
+            $self.Children += @{
+                Component = $ChildComponent
+                Metadata = $LayoutMetadata # For Grid: @{ Row=0; Col=0; ColSpan=1 }
+            }
+        }
+
+        Render = {
+            param($self)
+            if (-not $self.Visible) { return }
+
+            if ($self.ShowBorder) {
+                Write-BufferBox -X $self.X -Y $self.Y -Width $self.Width -Height $self.Height -Title " $($self.Title) "
+            }
+
+            # 1. Apply the layout to position the children
+            switch ($self.Layout) {
+                'Stack' { & $self._ApplyStackLayout($self) }
+                'Grid'  { & $self._ApplyGridLayout($self) }
+            }
+
+            # 2. Render the children now that they are positioned
+            foreach ($childInfo in $self.Children) {
+                $child = $childInfo.Component
+                if ($child.Render) {
+                    & $child.Render -self $child
+                }
+            }
+        }
+
+        _ApplyStackLayout = {
+            param($self)
+            $currentX = $self.X + $self.Padding
+            $currentY = $self.Y + $self.Padding
+
+            foreach ($childInfo in $self.Children) {
+                $child = $childInfo.Component
+                if (-not $child.Visible) { continue }
+
+                $child.X = $currentX
+                $child.Y = $currentY
+
+                if ($self.Orientation -eq 'Vertical') {
+                    $currentY += $child.Height + $self.Spacing
+                } else {
+                    $currentX += $child.Width + $self.Spacing
+                }
+            }
+        }
+
+        _ApplyGridLayout = {
+            param($self)
+            $availableWidth = $self.Width - ($self.Padding * 2)
+            $availableHeight = $self.Height - ($self.Padding * 2)
+
+            # Calculate fixed and star sizes
+            $fixedWidth = ($self.ColumnDefinitions | Where-Object { $_ -is [int] } | Measure-Object -Sum).Sum
+            $totalWidthStars = ($self.ColumnDefinitions | ForEach-Object { if ($_ -is [string] -and $_.EndsWith('*')) { [double]$_.TrimEnd('*') } else { 0 } } | Measure-Object -Sum).Sum
+            $widthPerStar = if ($totalWidthStars -gt 0) { ($availableWidth - $fixedWidth) / $totalWidthStars } else { 0 }
+
+            $fixedHeight = ($self.RowDefinitions | Where-Object { $_ -is [int] } | Measure-Object -Sum).Sum
+            $totalHeightStars = ($self.RowDefinitions | ForEach-Object { if ($_ -is [string] -and $_.EndsWith('*')) { [double]$_.TrimEnd('*') } else { 0 } } | Measure-Object -Sum).Sum
+            $heightPerStar = if ($totalHeightStars -gt 0) { ($availableHeight - $fixedHeight) / $totalHeightStars } else { 0 }
+
+            # Calculate final cell dimensions
+            $colWidths = $self.ColumnDefinitions | ForEach-Object { if ($_ -is [int]) { $_ } else { [math]::Floor( ([double]$_.TrimEnd('*')) * $widthPerStar ) } }
+            $rowHeights = $self.RowDefinitions | ForEach-Object { if ($_ -is [int]) { $_ } else { [math]::Floor( ([double]$_.TrimEnd('*')) * $heightPerStar ) } }
+            
+            $colOffsets = @(0) * $colWidths.Count
+            $rowOffsets = @(0) * $rowHeights.Count
+            for ($i = 1; $i -lt $colWidths.Count; $i++) { $colOffsets[$i] = $colOffsets[$i-1] + $colWidths[$i-1] }
+            for ($i = 1; $i -lt $rowHeights.Count; $i++) { $rowOffsets[$i] = $rowOffsets[$i-1] + $rowHeights[$i-1] }
+
+            # Position children
+            foreach ($childInfo in $self.Children) {
+                $child = $childInfo.Component
+                $meta = $childInfo.Metadata
+                $row = $meta.Row ?? 0
+                $col = $meta.Col ?? 0
+                $colSpan = $meta.ColSpan ?? 1
+                $rowSpan = $meta.RowSpan ?? 1
+
+                $child.X = $self.X + $self.Padding + $colOffsets[$col]
+                $child.Y = $self.Y + $self.Padding + $rowOffsets[$row]
+                
+                $child.Width = 0
+                for($i = 0; $i -lt $colSpan; $i++) { $child.Width += $colWidths[$col + $i] }
+                
+                $child.Height = 0
+                for($i = 0; $i -lt $rowSpan; $i++) { $child.Height += $rowHeights[$row + $i] }
+            }
+        }
+    }
+    return $component
+}
+```
+
+#### **How to Use It: A Declarative Form Layout**
+
+This is how you build a clean, responsive form. No more magic numbers.
+
+```powershell
+# In a screen's Init = { ... } block
+
+# 1. Create the panel with a Grid layout definition
+$self.Components.loginForm = New-TuiPanel -Props @{
+    X = 10; Y = 5; Width = 50; Height = 9; ShowBorder = $true; Title = "Login"
+    Layout = 'Grid'
+    # Define 2 columns: one 15 cells wide, the other takes the rest of the space ('1*')
+    ColumnDefinitions = @(15, '1*') 
+    # Define 3 rows, each 3 cells high
+    RowDefinitions = @(3, 3, 3)
+}
+
+# 2. Create the child components (no X/Y needed)
+$usernameLabel = New-TuiLabel -Props @{ Text = "Username: " }
+$usernameInput = New-TuiTextBox -Props @{}
+$passwordLabel = New-TuiLabel -Props @{ Text = "Password: " }
+$passwordInput = New-TuiTextBox -Props @{}
+$submitButton = New-TuiButton -Props @{ Text = "Login" }
+
+# 3. Add children to the panel with their grid coordinates
+$form = $self.Components.loginForm
+$form.AddChild($form, $usernameLabel, @{ Row = 0; Col = 0 })
+$form.AddChild($form, $usernameInput, @{ Row = 0; Col = 1 })
+$form.AddChild($form, $passwordLabel, @{ Row = 1; Col = 0 })
+$form.AddChild($form, $passwordInput, @{ Row = 1; Col = 1 })
+$form.AddChild($form, $submitButton,  @{ Row = 2; Col = 1 }) # Place button in the second column of the last row
+
+# The screen's Render function just needs to render $self.Components.loginForm
+# The panel will automatically calculate and set the X, Y, Width, and Height of all its children before rendering them.
+```
+
+By implementing these two patterns, you elevate your framework from a collection of drawing utilities to a genuine, modern UI architecture that is vastly more powerful, maintainable, and enjoyable to work with.
+
+
+
+v4 state proposal
+That is the perfect question to ask at this stage. You've correctly identified that managing state is the central challenge in a complex application. If we get the high-level state management right, building the individual screens becomes dramatically simpler and more predictable.
+
+The key is to move from thinking about "screen state" to thinking about **"Application State"**. We will create a single, global, reactive data store that acts as the ultimate "source of truth" for the entire application.
+
+This is a pattern inspired by popular state management libraries like Redux and Vuex, but adapted to be practical and idiomatic for your PowerShell framework.
+
+### The Vision: A Centralized Application Store
+
+Imagine a single, global object, let's call it `$AppStore`.
+
+1.  **Single Source of Truth:** All important data lives here: the list of projects, the active timers, the current user's settings, the list of tasks, etc. `$global:Data` will be replaced by this more powerful object.
+2.  **Reactive:** Any part of the application (any screen, any component) can "subscribe" to a piece of this data. When that data changes in the store, all subscribers are automatically notified and can update themselves.
+3.  **Predictable Mutations:** You can't just change data in the store from anywhere. All changes must go through well-defined, named **Actions** (e.g., `$AppStore.Actions.AddTask(...)`). This makes your data flow predictable and easy to debug. You can even log every action that occurs.
+4.  **Computed Data (Getters/Selectors):** The store can provide derived or computed data. For example, you can have a "getter" called `$AppStore.Getters.TodaysTasks()` that automatically returns a filtered list of tasks due today. Components don't need to re-implement this logic; they just ask the store for the data they need.
+
+### The Implementation: Upgrading the Data Manager
+
+The perfect place to implement this is by transforming your `data-manager.psm1` from a simple data container into a full-fledged **Application Store**. We will leverage the `New-TuiState` function we've already designed as the engine for this store.
+
+Here is the blueprint for an upgraded `data-manager.psm1`.
+
+**File to Edit:** `modules/data-manager.psm1`
+
+```powershell
+# Data Manager Module - UPGRADED TO APPLICATION STORE
+# Centralized, reactive state management for the entire application.
+
+# This script block-scoped variable holds our singleton store instance.
+$script:AppStore = $null
+
+function global:Initialize-DataManager {
+    <#
+    .SYNOPSIS
+    Initializes the Application Store. This should be called once at startup.
+    #>
+    if ($null -ne $script:AppStore) { return } # Prevent re-initialization
+
+    # 1. Define the initial shape of our entire application's data
+    $initialState = @{
+        Projects = @{}
+        Tasks = @()
+        TimeEntries = @()
+        ActiveTimers = @{}
+        Settings = @{
+            Theme = "Modern"
+            AutoSave = $true
+        }
+        # We can add UI state here too!
+        IsDataLoading = $true
+        CurrentUser = "DefaultUser"
+    }
+
+    # 2. Define the actions that can mutate the state.
+    # These are the ONLY ways to change application data.
+    $actions = @{
+        # Task Actions
+        AddTask = { param($taskData)
+            $newTask = @{ Id = [Guid]::NewGuid().ToString() } + $taskData
+            $this.Tasks = @($this.Tasks) + $newTask
+        }
+        UpdateTask = { param($taskId, $updateData)
+            $task = ($this.Tasks | Where-Object { $_.Id -eq $taskId })[0]
+            if ($task) {
+                foreach ($key in $updateData.Keys) { $task[$key] = $updateData[$key] }
+                # We must re-assign the array to trigger the subscription
+                $this.Tasks = @($this.Tasks)
+            }
+        }
+        # Project Actions, Timer Actions, etc. would go here...
+        StartTimer = { param($timerData)
+            $newTimers = $this.ActiveTimers.Clone()
+            $newTimers[$timerData.Id] = $timerData
+            $this.ActiveTimers = $newTimers
+        }
+        StopTimer = { param($timerId)
+            $newTimers = $this.ActiveTimers.Clone()
+            $newTimers.Remove($timerId)
+            $this.ActiveTimers = $newTimers
+        }
+    }
+
+    # 3. Create the store using our reactive state factory
+    $script:AppStore = New-TuiState -InitialState $initialState -Actions $actions
+
+    # 4. Define Getters (Computed Properties) for convenience
+    $getters = @{
+        # Returns a filtered list of tasks due today
+        TodaysTasks = {
+            $today = (Get-Date).ToString("yyyy-MM-dd")
+            return @($this.Tasks | Where-Object { $_.DueDate -eq $today -and -not $_.Completed })
+        }
+        # Returns a count of active timers
+        RunningTimerCount = {
+            return $this.ActiveTimers.Count
+        }
+        # Returns a project by its key
+        ProjectByKey = {
+            param($key)
+            return $this.Projects[$key]
+        }
+    }
+    # Add getters as script properties to the store object
+    foreach ($getter in $getters.GetEnumerator()) {
+        $script:AppStore | Add-Member -MemberType ScriptMethod -Name "Get$($getter.Name)" -Value $getter.Value
+    }
+
+
+    # 5. Make the store globally accessible
+    $global:AppStore = $script:AppStore
+
+    # 6. Load data from disk and subscribe to auto-save
+    Load-UnifiedData # This function will now populate the store instead of $global:Data
+    
+    # Auto-save whenever any data changes
+    $script:AppStore.Subscribe('*', {
+        if ($script:AppStore.Settings.AutoSave) {
+            # Debounce this call in a real app to avoid saving on every keystroke
+            Save-UnifiedData
+        }
+    })
+
+    Write-Log -Level Info -Message "Application Store initialized."
+}
+
+function global:Load-UnifiedData {
+    $dataPath = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "PMCTerminal\pmc-data.json"
+    if (Test-Path $dataPath) {
+        try {
+            $jsonContent = Get-Content $dataPath -Raw
+            $loadedData = $jsonContent | ConvertFrom-Json -AsHashtable -Depth 20
+            
+            # Populate the store with loaded data
+            $script:AppStore.Update($loadedData)
+            $script:AppStore.IsDataLoading = $false
+            Write-Log -Level Info "Data loaded into Application Store."
+        } catch {
+            Write-Warning "Failed to load data: $_"
+        }
+    } else {
+        # First run, no data to load
+        $script:AppStore.IsDataLoading = $false
+    }
+}
+
+function global:Save-UnifiedData {
+    $dataPath = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "PMCTerminal\pmc-data.json"
+    try {
+        # We only need to save the raw data, not the whole store object
+        $dataToSave = $script:AppStore._data
+        $jsonContent = $dataToSave | ConvertTo-Json -Depth 20 -Compress -WarningAction SilentlyContinue
+        Set-Content -Path $dataPath -Value $jsonContent -Force
+    } catch {
+        Write-Error "Failed to save data: $_"
+    }
+}
+
+# Remove the old exported $Data variable
+Export-ModuleMember -Function 'Initialize-DataManager', 'Load-UnifiedData', 'Save-UnifiedData' -Variable 'AppStore'
+```
+
+### How This Changes Everything for the Screens
+
+With the global `$AppStore` in place, building screens becomes incredibly clean and simple. The screens no longer need to manage their own complex state; they just **connect to the store**.
+
+#### **Example: A Simplified `DashboardScreen`**
+
+```powershell
+# In screens/dashboard-screen-grid.psm1
+
+function global:Get-DashboardScreen {
+    $screen = @{
+        Name = "DashboardScreen"
+        Components = @{}
+
+        Init = {
+            param($self)
+
+            # --- Create UI Components ---
+            $self.Components.tasksTable = New-TuiDataTable -Props @{
+                # ... coordinates and columns ...
+                Title = "Today's Tasks"
+                ShowBorder = $false
+            }
+            $self.Components.statsLabel = New-TuiLabel -Props @{
+                # ... coordinates ...
+            }
+            # ... other components ...
+
+            # --- Connect Components to the AppStore ---
+
+            # The tasks table subscribes to the 'TodaysTasks' getter.
+            # It doesn't know HOW the tasks are filtered; it just gets the result.
+            $global:AppStore.Subscribe('Tasks', {
+                # This subscription triggers whenever the main task list changes
+                $self.Components.tasksTable.Data = $global:AppStore.GetTodaysTasks()
+                Request-TuiRefresh
+            })
+
+            # The stats label subscribes to multiple pieces of state.
+            $global:AppStore.Subscribe('*', {
+                # This "wildcard" subscriber runs on ANY state change.
+                $stats = "Today: $($global:AppStore.GetTodayHours())h | Week: $($global:AppStore.GetWeekHours())h | Timers: $($global:AppStore.GetRunningTimerCount())"
+                $self.Components.statsLabel.Text = $stats
+                Request-TuiRefresh
+            })
+
+            # The Quick Actions list dispatches actions to the store.
+            $self.Components.quickActions.OnRowSelect = {
+                param($SelectedData, $SelectedIndex)
+                switch ($SelectedIndex) {
+                    2 {
+                        # Instead of pushing a screen directly, it could dispatch a navigation action
+                        # $global:AppStore.Actions.NavigateTo('TaskScreen')
+                        # For now, we still push the screen.
+                        if (Get-Command Get-TaskManagementScreen -ErrorAction SilentlyContinue) {
+                            Push-Screen -Screen (Get-TaskManagementScreen)
+                        }
+                    }
+                }
+            }
+        }
+        # ... Render and HandleInput are now much simpler ...
+    }
+    return $screen
+}
+```
+
+### The Benefits of This High-Level Approach
+
+1.  **Decoupling:** The `DashboardScreen` has no idea how tasks are added or completed. It doesn't care. It only knows that when the `Tasks` list in the store changes, it needs to ask for the latest `TodaysTasks` and update its table. The `TaskManagementScreen` can modify the tasks, and the dashboard will update automatically when you navigate back to it, solving the "stale data" problem permanently.
+2.  **Centralized Logic:** All business logic (how to filter tasks, how to calculate hours) lives in one place: the store's getters and actions. This makes it easy to find, update, and test.
+3.  **Simplified Screens:** Screen `Init` blocks become much shorter. Their job is reduced to:
+    *   Create UI components.
+    *   Subscribe those components to the relevant parts of the `$AppStore`.
+    *   Wire up input events to dispatch actions to the `$AppStore`.
+4.  **Time-Travel Debugging (Advanced):** Because all state changes go through named actions, you can log every action and its payload. This allows you to create a "time-travel" debugger where you can replay the sequence of actions to reproduce a bug perfectly.
+5.  **Trivial Data Persistence:** The `Save-UnifiedData` function is now dead simple. It just serializes the `_data` property of the store. It doesn't need to know anything about the application's structure.
+
+By elevating your state management to this global, application-wide level, you create a robust foundation that makes every other part of the development process easier, faster, and less prone to bugs.
+

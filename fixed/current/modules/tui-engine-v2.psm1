@@ -18,6 +18,7 @@ $script:TuiState = @{
     RenderStats     = @{ LastFrameTime = 0; FrameCount = 0; TotalTime = 0; TargetFPS = 60 }
     Components      = @()
     Layouts         = @{}
+    DebugOverlayEnabled = $false
     FocusedComponent = $null
     
     # Thread-safe input queue and runspace management
@@ -720,11 +721,13 @@ function global:Write-BufferBox {
     # Title
     if ($Title) {
         $titleText = " $Title "
-        if ($titleText.Length > ($Width - 2)) { 
-            $titleText = " $($Title.Substring(0, $Width - 5))... " 
+        if ($titleText.Length > ($Width - 2)) {
+            # FIX: Ensure the length for Substring is never negative.
+            $maxLength = [Math]::Max(0, $Width - 5)
+            $titleText = " $($Title.Substring(0, $maxLength))... "
         }
         $titleX = $X + [Math]::Floor(($Width - $titleText.Length) / 2)
-        Write-BufferString -X $titleX -Y $Y -Text $titleText -ForegroundColor $BorderColor -BackgroundColor $BackgroundColor
+       Write-BufferString -X $titleX -Y $Y -Text $titleText -ForegroundColor $BorderColor -BackgroundColor $BackgroundColor
     }
     
     # Sides and Fill

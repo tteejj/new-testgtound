@@ -150,6 +150,9 @@ function global:Get-DashboardScreen {
                         AllowSort = $false
                         AllowFilter = $false
                         MultiSelect = $false
+                        ShowHeader = $false
+                        ShowFooter = $false
+                        Title = "Quick Actions"
                         OnRowSelect = {
                             param($SelectedData, $SelectedIndex)
                             Write-Log -Level Debug -Message "Quick action selected: $SelectedIndex"
@@ -162,6 +165,10 @@ function global:Get-DashboardScreen {
                                 5 { if (Get-Command Get-SettingsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-SettingsScreen) } }
                             }
                         }
+                    }
+                    # Force process data to ensure display
+                    if ($self.Components.quickActions.ProcessData) {
+                        & $self.Components.quickActions.ProcessData -self $self.Components.quickActions
                     }
                     Write-Log -Level Debug -Message "Quick Actions DataTable created"
                 } else {
@@ -181,6 +188,8 @@ function global:Get-DashboardScreen {
                         AllowSort = $false
                         AllowFilter = $false
                         MultiSelect = $false
+                        Title = "Active Timers"
+                        ShowFooter = $false
                     }
                     Write-Log -Level Debug -Message "Active Timers DataTable created"
                 }
@@ -199,6 +208,8 @@ function global:Get-DashboardScreen {
                         AllowSort = $true
                         AllowFilter = $false
                         MultiSelect = $false
+                        Title = "Today's Tasks"
+                        ShowFooter = $false
                     }
                     Write-Log -Level Debug -Message "Today's Tasks DataTable created"
                 }
@@ -296,6 +307,13 @@ function global:Get-DashboardScreen {
                     if (Get-Command Get-DebugLogScreen -ErrorAction SilentlyContinue) {
                         Push-Screen -Screen (Get-DebugLogScreen)
                     }
+                    return $true
+                }
+                
+                # Debug overlay toggle
+                if ($Key.Key -eq [ConsoleKey]::F10) {
+                    $global:TuiState.DebugOverlayEnabled = -not $global:TuiState.DebugOverlayEnabled
+                    Request-TuiRefresh
                     return $true
                 }
                 

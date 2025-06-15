@@ -200,13 +200,13 @@ function global:Get-TimeEntryFormScreen {
             $self.Components.projectError = New-TuiLabel -Props @{
                 X = $formX + 21; Y = $formY + 5
                 Text = ""
-                ForegroundColor = Red
+                ForegroundColor = [ConsoleColor]::Red
             }
             
             $self.Components.hoursError = New-TuiLabel -Props @{
                 X = $formX + 21; Y = $formY + 8
                 Text = ""
-                ForegroundColor = Red
+                ForegroundColor = [ConsoleColor]::Red
             }
             
             # Focus management

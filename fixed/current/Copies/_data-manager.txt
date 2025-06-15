@@ -55,7 +55,8 @@ function global:Load-UnifiedData {
     if (Test-Path $script:DataPath) {
         try {
             $jsonContent = Get-Content $script:DataPath -Raw
-            $loadedData = $jsonContent | ConvertFrom-Json -AsHashtable
+            # Use -Depth to ensure deeply nested objects are properly deserialized
+            $loadedData = $jsonContent | ConvertFrom-Json -AsHashtable -Depth 20
             
             # Merge with default structure to ensure all keys exist
             foreach ($key in $loadedData.Keys) {
@@ -112,8 +113,9 @@ function global:Save-UnifiedData {
             }
         }
         
-        # Save data
-        $jsonContent = $script:Data | ConvertTo-Json -Depth 10
+        # Save data with increased depth to handle nested objects
+        # Use -Compress to reduce file size and -WarningAction to suppress depth warnings
+        $jsonContent = $script:Data | ConvertTo-Json -Depth 20 -Compress -WarningAction SilentlyContinue
         Set-Content -Path $script:DataPath -Value $jsonContent -Force
         
         $script:LastSaveTime = Get-Date

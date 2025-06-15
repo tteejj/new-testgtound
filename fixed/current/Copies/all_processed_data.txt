@@ -18,7 +18,7 @@ $script:ModulesToLoad = @(
     @{ Name = "dialog-system"; Path = "modules\dialog-system.psm1"; Required = $true },
     @{ Name = "tui-components"; Path = "components\tui-components.psm1"; Required = $true },
     @{ Name = "advanced-input-components"; Path = "components\advanced-input-components.psm1"; Required = $false },
-    @{ Name = "advanced-data-components"; Path = "components\advanced-data-components.psm1"; Required = $false },
+    @{ Name = "advanced-data-components"; Path = "components\advanced-data-components.psm1"; Required = $true },
     @{ Name = "layout-manager"; Path = "utilities\layout-manager.psm1"; Required = $false },
     @{ Name = "positioning-helper"; Path = "utilities\positioning-helper.psm1"; Required = $false },
     @{ Name = "focus-manager"; Path = "utilities\focus-manager.psm1"; Required = $false },
@@ -255,9 +255,12 @@ function Start-PMCTerminal {
         
         if ($Data -and (Get-Command -Name "Save-UnifiedData" -ErrorAction SilentlyContinue)) {
             if (-not $Silent) {
-                Write-Host "Saving data..." -ForegroundColor Yellow
+                Write-Host "`nSaving data..." -ForegroundColor Yellow -NoNewline
             }
             Save-UnifiedData
+            if (-not $Silent) {
+                Write-Host " Done!" -ForegroundColor Green
+            }
         }
         
         if (-not $Silent) {
@@ -305,6 +308,211 @@ function global:Get-TaskManagementScreen {
         # 2. Components: Storage for instantiated component objects
         Components = @{}
         
+        # Focus management
+        FocusedComponentName = 'taskTable'
+        
+        # Define helper methods directly on the screen
+        GetFilteredTasks = {
+            param($screen)
+            $tasks = $screen.State.tasks
+            $filter = $screen.State.filter
+            
+            # Apply filter
+            $filtered = switch ($filter) {
+                "active" { $tasks | Where-Object { $_.Status -eq "Active" } }
+                "completed" { $tasks | Where-Object { $_.Status -eq "Completed" } }
+                default { $tasks }
+            }
+            
+            # Apply sort
+            $sorted = switch ($screen.State.sortBy) {
+                "priority" { 
+                    $filtered | Sort-Object @{
+                        Expression = {
+                            switch ($_.Priority) {
+                                "Critical" { 0 }
+                                "High" { 1 }
+                                "Medium" { 2 }
+                                "Low" { 3 }
+                            }
+                        }
+                    }, Created
+                }
+                "dueDate" { $filtered | Sort-Object DueDate, Priority }
+                "created" { $filtered | Sort-Object Created -Descending }
+                default { $filtered }
+            }
+            
+            # Transform for table display
+            return @($sorted | ForEach-Object {
+                @{
+                    Id = $_.Id
+                    Status = if ($_.Status -eq "Completed") { "X" } else { " " }
+                    Priority = $_.Priority
+                    Title = if ($_.Title.Length -gt 30) { $_.Title.Substring(0, 27) + "..." } else { $_.Title }
+                    Category = $_.Category
+                    DueDate = $_.DueDate
+                }
+            })
+        }
+        
+        RefreshTaskTable = {
+            param($screen)
+            $tableData = & $screen.GetFilteredTasks -screen $screen
+            $screen.Components.taskTable.Data = $tableData
+            # Force process data to refresh the display
+            if ($screen.Components.taskTable.ProcessData) {
+                & $screen.Components.taskTable.ProcessData -self $screen.Components.taskTable
+            }
+            Request-TuiRefresh
+        }
+        
+        ShowAddTaskForm = {
+            param($screen)
+            $screen.State.showingForm = $true
+            $screen.State.editingTaskId = $null
+            $screen.State.formData = @{
+                title = ""
+                description = ""
+                category = "Work"
+                priority = "Medium"
+                dueDate = (Get-Date).AddDays(7).ToString("MM/dd/yy")
+            }
+            
+            # Update form components
+            $screen.Components.formTitle.Text = ""
+            $screen.Components.formDescription.Text = ""
+            $screen.Components.formCategory.Value = "Work"
+            $screen.Components.formPriority.Value = "Medium"
+            $screen.Components.formDueDate.Value = (Get-Date).AddDays(7)
+            
+            # Show form components
+            foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
+                $screen.Components[$comp].Visible = $true
+            }
+            
+            # Hide table
+            $screen.Components.taskTable.Visible = $false
+            
+            # Focus first field
+            $screen.FocusedComponentName = 'formTitle'
+            Request-TuiRefresh
+        }
+        
+        ShowEditTaskForm = {
+            param($screen, $taskId)
+            $task = $screen.State.tasks | Where-Object { $_.Id -eq $taskId }
+            if (-not $task) { return }
+            
+            $screen.State.showingForm = $true
+            $screen.State.editingTaskId = $task.Id
+            $screen.State.formData = @{
+                title = $task.Title
+                description = $task.Description
+                category = $task.Category
+                priority = $task.Priority
+                dueDate = $task.DueDate
+            }
+            
+            # Update form components
+            $screen.Components.formTitle.Text = $task.Title
+            $screen.Components.formDescription.Text = $task.Description
+            $screen.Components.formCategory.Value = $task.Category
+            $screen.Components.formPriority.Value = $task.Priority
+            $screen.Components.formDueDate.Value = [DateTime]::Parse($task.DueDate)
+            
+            # Show form components
+            foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
+                $screen.Components[$comp].Visible = $true
+            }
+            
+            # Hide table
+            $screen.Components.taskTable.Visible = $false
+            
+            # Focus first field
+            $screen.FocusedComponentName = 'formTitle'
+            Request-TuiRefresh
+        }
+        
+        SaveTask = {
+            param($screen)
+            $formData = $screen.State.formData
+            $editingId = $screen.State.editingTaskId
+            
+            if ($editingId) {
+                # Update existing
+                $task = $screen.State.tasks | Where-Object { $_.Id -eq $editingId }
+                if ($task) {
+                    $task.Title = $formData.title
+                    $task.Description = $formData.description
+                    $task.Category = $formData.category
+                    $task.Priority = $formData.priority
+                    $task.DueDate = $formData.dueDate
+                }
+            } else {
+                # Add new
+                $newTask = @{
+                    Id = [Guid]::NewGuid().ToString()
+                    Title = $formData.title
+                    Description = $formData.description
+                    Category = $formData.category
+                    Priority = $formData.priority
+                    Status = "Active"
+                    DueDate = $formData.dueDate
+                    Created = Get-Date
+                    Completed = $null
+                }
+                $screen.State.tasks += $newTask
+            }
+            
+            & $screen.HideForm -screen $screen
+            & $screen.RefreshTaskTable -screen $screen
+        }
+        
+        HideForm = {
+            param($screen)
+            $screen.State.showingForm = $false
+            
+            # Hide form components
+            foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
+                $screen.Components[$comp].Visible = $false
+            }
+            
+            # Show table
+            $screen.Components.taskTable.Visible = $true
+            $screen.FocusedComponentName = 'taskTable'
+            Request-TuiRefresh
+        }
+        
+        DeleteTask = {
+            param($screen)
+            $selectedRow = $screen.Components.taskTable.SelectedRow
+            if ($selectedRow -ge 0 -and $selectedRow -lt $screen.Components.taskTable.ProcessedData.Count) {
+                $taskData = $screen.Components.taskTable.ProcessedData[$selectedRow]
+                $screen.State.tasks = @($screen.State.tasks | Where-Object { $_.Id -ne $taskData.Id })
+                & $screen.RefreshTaskTable -screen $screen
+            }
+        }
+        
+        ToggleTaskStatus = {
+            param($screen)
+            $selectedRow = $screen.Components.taskTable.SelectedRow
+            if ($selectedRow -ge 0 -and $selectedRow -lt $screen.Components.taskTable.ProcessedData.Count) {
+                $taskData = $screen.Components.taskTable.ProcessedData[$selectedRow]
+                $task = $screen.State.tasks | Where-Object { $_.Id -eq $taskData.Id }
+                if ($task) {
+                    if ($task.Status -eq "Active") {
+                        $task.Status = "Completed"
+                        $task.Completed = Get-Date
+                    } else {
+                        $task.Status = "Active"
+                        $task.Completed = $null
+                    }
+                    & $screen.RefreshTaskTable -screen $screen
+                }
+            }
+        }
+        
         # 3. Init: One-time setup
         Init = {
             param($self)
@@ -349,86 +557,64 @@ function global:Get-TaskManagementScreen {
             $self.State.tasks = $sampleTasks
             
             # Create main task table
-            if (Get-Command New-TuiDataTable -ErrorAction SilentlyContinue) {
-                $self.Components.taskTable = New-TuiDataTable -Props @{
-                    X = 2; Y = 5; Width = 76; Height = 20
-                    Columns = @(
-                        @{ Name = "Status"; Header = "✓"; Width = 3 }
-                        @{ Name = "Priority"; Header = "Priority"; Width = 10 }
-                        @{ Name = "Title"; Header = "Title"; Width = 30 }
-                        @{ Name = "Category"; Header = "Category"; Width = 11 }
-                        @{ Name = "DueDate"; Header = "Due Date"; Width = 10 }
-                    )
-                    Data = & $self.GetFilteredTasks
-                    AllowSort = $false  # We handle sorting ourselves
-                    AllowFilter = $false
-                    MultiSelect = $false
-                    OnRowSelect = {
-                        param($Row, $Index)
-                        # Toggle task status on Enter
-                        $task = $self.State.tasks | Where-Object { $_.Id -eq $Row.Id }
-                        if ($task) {
-                            if ($task.Status -eq "Active") {
-                                $task.Status = "Completed"
-                                $task.Completed = Get-Date
-                            } else {
-                                $task.Status = "Active"
-                                $task.Completed = $null
-                            }
-                            $self.RefreshTaskTable()
+            $tableScreen = $self  # Capture reference for closure
+            $self.Components.taskTable = New-TuiDataTable -Props @{
+                X = 2; Y = 5; Width = 76; Height = 20
+                Columns = @(
+                    @{ Name = "Status"; Header = "✓"; Width = 3 }
+                    @{ Name = "Priority"; Header = "Priority"; Width = 10 }
+                    @{ Name = "Title"; Header = "Title"; Width = 30 }
+                    @{ Name = "Category"; Header = "Category"; Width = 11 }
+                    @{ Name = "DueDate"; Header = "Due Date"; Width = 10 }
+                )
+                Data = & $self.GetFilteredTasks -screen $self
+                AllowSort = $false  # We handle sorting ourselves
+                AllowFilter = $false
+                MultiSelect = $false
+                Title = "Tasks"
+                OnRowSelect = {
+                    param($SelectedData, $SelectedIndex)
+                    # Toggle task status on Enter
+                    $task = $tableScreen.State.tasks | Where-Object { $_.Id -eq $SelectedData.Id }
+                    if ($task) {
+                        if ($task.Status -eq "Active") {
+                            $task.Status = "Completed"
+                            $task.Completed = Get-Date
+                        } else {
+                            $task.Status = "Active"
+                            $task.Completed = $null
                         }
-                    }
-                }
-            } else {
-                # Fallback to basic table
-                $self.Components.taskTable = New-TuiTable -Props @{
-                    X = 2; Y = 5; Width = 76; Height = 20
-                    Columns = @(
-                        @{ Name = "Status"; Header = "✓" }
-                        @{ Name = "Priority"; Header = "Priority" }
-                        @{ Name = "Title"; Header = "Title" }
-                        @{ Name = "Category"; Header = "Category" }
-                        @{ Name = "DueDate"; Header = "Due Date" }
-                    )
-                    Rows = & $self.GetFilteredTasks
-                    OnRowSelect = {
-                        param($Row, $Index)
-                        # Toggle task status
-                        $task = $self.State.tasks | Where-Object { $_.Id -eq $Row.Id }
-                        if ($task) {
-                            if ($task.Status -eq "Active") {
-                                $task.Status = "Completed"
-                                $task.Completed = Get-Date
-                            } else {
-                                $task.Status = "Active"
-                                $task.Completed = $null
-                            }
-                            $self.RefreshTaskTable()
-                        }
+                        & $tableScreen.RefreshTaskTable -screen $tableScreen
                     }
                 }
             }
             
+            # Force process data to ensure display
+            if ($self.Components.taskTable.ProcessData) {
+                & $self.Components.taskTable.ProcessData -self $self.Components.taskTable
+            }
+            
             # Form components (hidden by default)
+            $formScreen = $self  # Capture reference for closures
             $self.Components.formTitle = New-TuiTextBox -Props @{
                 X = 25; Y = 10; Width = 54; Height = 3
                 Placeholder = "Enter task title..."
                 Visible = $false
-                OnChange = { param($NewValue) $self.State.formData.title = $NewValue }
+                OnChange = { param($self, $Key) $formScreen.State.formData.title = $self.Text }
             }
             
             $self.Components.formDescription = New-TuiTextArea -Props @{
                 X = 25; Y = 14; Width = 54; Height = 5
                 Placeholder = "Enter task description..."
                 Visible = $false
-                OnChange = { param($NewValue) $self.State.formData.description = $NewValue }
+                OnChange = { param($self, $Key) $formScreen.State.formData.description = $self.Text }
             }
             
             $self.Components.formCategory = New-TuiDropdown -Props @{
                 X = 25; Y = 20; Width = 20; Height = 3
                 Options = $self.State.categories | ForEach-Object { @{ Display = $_; Value = $_ } }
                 Visible = $false
-                OnChange = { param($NewValue) $self.State.formData.category = $NewValue }
+                OnChange = { param($NewValue) $formScreen.State.formData.category = $NewValue }
             }
             
             $self.Components.formPriority = New-TuiDropdown -Props @{
@@ -440,222 +626,27 @@ function global:Get-TaskManagementScreen {
                     @{ Display = "Low"; Value = "Low" }
                 )
                 Visible = $false
-                OnChange = { param($NewValue) $self.State.formData.priority = $NewValue }
+                OnChange = { param($NewValue) $formScreen.State.formData.priority = $NewValue }
             }
             
             $self.Components.formDueDate = New-TuiDatePicker -Props @{
                 X = 25; Y = 24; Width = 20; Height = 3
                 Visible = $false
-                OnChange = { param($NewValue) $self.State.formData.dueDate = $NewValue.ToString("MM/dd/yy") }
+                OnChange = { param($NewValue) $formScreen.State.formData.dueDate = $NewValue.ToString("MM/dd/yy") }
             }
             
             $self.Components.formSaveButton = New-TuiButton -Props @{
                 X = 30; Y = 28; Width = 15; Height = 3
                 Text = "Save"
                 Visible = $false
-                OnClick = { $self.SaveTask() }
+                OnClick = { & $formScreen.SaveTask -screen $formScreen }
             }
             
             $self.Components.formCancelButton = New-TuiButton -Props @{
                 X = 50; Y = 28; Width = 15; Height = 3
                 Text = "Cancel"
                 Visible = $false
-                OnClick = { $self.HideForm() }
-            }
-            
-            # Methods
-            $self.GetFilteredTasks = {
-                $tasks = $self.State.tasks
-                $filter = $self.State.filter
-                
-                # Apply filter
-                $filtered = switch ($filter) {
-                    "active" { $tasks | Where-Object { $_.Status -eq "Active" } }
-                    "completed" { $tasks | Where-Object { $_.Status -eq "Completed" } }
-                    default { $tasks }
-                }
-                
-                # Apply sort
-                $sorted = switch ($self.State.sortBy) {
-                    "priority" { 
-                        $filtered | Sort-Object @{
-                            Expression = {
-                                switch ($_.Priority) {
-                                    "Critical" { 0 }
-                                    "High" { 1 }
-                                    "Medium" { 2 }
-                                    "Low" { 3 }
-                                }
-                            }
-                        }, Created
-                    }
-                    "dueDate" { $filtered | Sort-Object DueDate, Priority }
-                    "created" { $filtered | Sort-Object Created -Descending }
-                    default { $filtered }
-                }
-                
-                # Transform for table display
-                return @($sorted | ForEach-Object {
-                    @{
-                        Id = $_.Id
-                        Status = if ($_.Status -eq "Completed") { "X" } else { " " }
-                        Priority = $_.Priority
-                        Title = if ($_.Title.Length -gt 30) { $_.Title.Substring(0, 27) + "..." } else { $_.Title }
-                        Category = $_.Category
-                        DueDate = $_.DueDate
-                    }
-                })
-            }
-            
-            $self.RefreshTaskTable = {
-                $tableData = & $self.GetFilteredTasks
-                if ($self.Components.taskTable.Data) {
-                    $self.Components.taskTable.Data = $tableData
-                } else {
-                    $self.Components.taskTable.Rows = $tableData
-                }
-                Request-TuiRefresh
-            }
-            
-            $self.ShowAddTaskForm = {
-                $self.State.showingForm = $true
-                $self.State.editingTaskId = $null
-                $self.State.formData = @{
-                    title = ""
-                    description = ""
-                    category = "Work"
-                    priority = "Medium"
-                    dueDate = (Get-Date).AddDays(7).ToString("MM/dd/yy")
-                }
-                
-                # Update form components
-                $self.Components.formTitle.Text = ""
-                $self.Components.formDescription.Text = ""
-                $self.Components.formCategory.Value = "Work"
-                $self.Components.formPriority.Value = "Medium"
-                $self.Components.formDueDate.Value = (Get-Date).AddDays(7)
-                
-                # Show form components
-                foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
-                    $self.Components[$comp].Visible = $true
-                }
-                
-                # Hide table
-                $self.Components.taskTable.Visible = $false
-                
-                # Focus first field
-                $self.FocusedComponentName = 'formTitle'
-                Request-TuiRefresh
-            }
-            
-            $self.ShowEditTaskForm = {
-                param($taskId)
-                $task = $self.State.tasks | Where-Object { $_.Id -eq $taskId }
-                if (-not $task) { return }
-                
-                $self.State.showingForm = $true
-                $self.State.editingTaskId = $task.Id
-                $self.State.formData = @{
-                    title = $task.Title
-                    description = $task.Description
-                    category = $task.Category
-                    priority = $task.Priority
-                    dueDate = $task.DueDate
-                }
-                
-                # Update form components
-                $self.Components.formTitle.Text = $task.Title
-                $self.Components.formDescription.Text = $task.Description
-                $self.Components.formCategory.Value = $task.Category
-                $self.Components.formPriority.Value = $task.Priority
-                $self.Components.formDueDate.Value = [DateTime]::Parse($task.DueDate)
-                
-                # Show form components
-                foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
-                    $self.Components[$comp].Visible = $true
-                }
-                
-                # Hide table
-                $self.Components.taskTable.Visible = $false
-                
-                # Focus first field
-                $self.FocusedComponentName = 'formTitle'
-                Request-TuiRefresh
-            }
-            
-            $self.SaveTask = {
-                $formData = $self.State.formData
-                $editingId = $self.State.editingTaskId
-                
-                if ($editingId) {
-                    # Update existing
-                    $task = $self.State.tasks | Where-Object { $_.Id -eq $editingId }
-                    if ($task) {
-                        $task.Title = $formData.title
-                        $task.Description = $formData.description
-                        $task.Category = $formData.category
-                        $task.Priority = $formData.priority
-                        $task.DueDate = $formData.dueDate
-                    }
-                } else {
-                    # Add new
-                    $newTask = @{
-                        Id = [Guid]::NewGuid().ToString()
-                        Title = $formData.title
-                        Description = $formData.description
-                        Category = $formData.category
-                        Priority = $formData.priority
-                        Status = "Active"
-                        DueDate = $formData.dueDate
-                        Created = Get-Date
-                        Completed = $null
-                    }
-                    $self.State.tasks += $newTask
-                }
-                
-                $self.HideForm()
-                $self.RefreshTaskTable()
-            }
-            
-            $self.HideForm = {
-                $self.State.showingForm = $false
-                
-                # Hide form components
-                foreach ($comp in @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')) {
-                    $self.Components[$comp].Visible = $false
-                }
-                
-                # Show table
-                $self.Components.taskTable.Visible = $true
-                $self.FocusedComponentName = 'taskTable'
-                Request-TuiRefresh
-            }
-            
-            $self.DeleteTask = {
-                $selectedRow = $self.Components.taskTable.SelectedRow
-                if ($selectedRow -ge 0 -and $selectedRow -lt $self.Components.taskTable.Rows.Count) {
-                    $taskData = $self.Components.taskTable.Rows[$selectedRow]
-                    $self.State.tasks = @($self.State.tasks | Where-Object { $_.Id -ne $taskData.Id })
-                    $self.RefreshTaskTable()
-                }
-            }
-            
-            $self.ToggleTaskStatus = {
-                $selectedRow = $self.Components.taskTable.SelectedRow
-                if ($selectedRow -ge 0 -and $selectedRow -lt $self.Components.taskTable.Rows.Count) {
-                    $taskData = $self.Components.taskTable.Rows[$selectedRow]
-                    $task = $self.State.tasks | Where-Object { $_.Id -eq $taskData.Id }
-                    if ($task) {
-                        if ($task.Status -eq "Active") {
-                            $task.Status = "Completed"
-                            $task.Completed = Get-Date
-                        } else {
-                            $task.Status = "Active"
-                            $task.Completed = $null
-                        }
-                        $self.RefreshTaskTable()
-                    }
-                }
+                OnClick = { & $formScreen.HideForm -screen $formScreen }
             }
         }
         
@@ -784,7 +775,7 @@ function global:Get-TaskManagementScreen {
                 # Handle form navigation
                 switch ($Key.Key) {
                     ([ConsoleKey]::Escape) {
-                        $self.HideForm()
+                        & $self.HideForm -screen $self
                         return $true
                     }
                     ([ConsoleKey]::Tab) {
@@ -827,7 +818,7 @@ function global:Get-TaskManagementScreen {
                     return "Back"
                 }
                 ([ConsoleKey]::Spacebar) {
-                    $self.ToggleTaskStatus()
+                    & $self.ToggleTaskStatus -screen $self
                     return $true
                 }
             }
@@ -836,49 +827,49 @@ function global:Get-TaskManagementScreen {
             if ($Key.KeyChar) {
                 switch ($Key.KeyChar.ToString().ToUpper()) {
                     'N' {
-                        $self.ShowAddTaskForm()
+                        & $self.ShowAddTaskForm -screen $self
                         return $true
                     }
                     'E' {
                         $selectedRow = $self.Components.taskTable.SelectedRow
-                        if ($selectedRow -ge 0 -and $selectedRow -lt $self.Components.taskTable.Rows.Count) {
-                            $taskData = $self.Components.taskTable.Rows[$selectedRow]
-                            $self.ShowEditTaskForm($taskData.Id)
+                        if ($selectedRow -ge 0 -and $selectedRow -lt $self.Components.taskTable.ProcessedData.Count) {
+                            $taskData = $self.Components.taskTable.ProcessedData[$selectedRow]
+                            & $self.ShowEditTaskForm -screen $self -taskId $taskData.Id
                         }
                         return $true
                     }
                     'D' {
-                        $self.DeleteTask()
+                        & $self.DeleteTask -screen $self
                         return $true
                     }
                     '1' {
                         $self.State.filter = "all"
-                        $self.RefreshTaskTable()
+                        & $self.RefreshTaskTable -screen $self
                         return $true
                     }
                     '2' {
                         $self.State.filter = "active"
-                        $self.RefreshTaskTable()
+                        & $self.RefreshTaskTable -screen $self
                         return $true
                     }
                     '3' {
                         $self.State.filter = "completed"
-                        $self.RefreshTaskTable()
+                        & $self.RefreshTaskTable -screen $self
                         return $true
                     }
                     'P' {
                         $self.State.sortBy = "priority"
-                        $self.RefreshTaskTable()
+                        & $self.RefreshTaskTable -screen $self
                         return $true
                     }
                     'U' {
                         $self.State.sortBy = "dueDate"
-                        $self.RefreshTaskTable()
+                        & $self.RefreshTaskTable -screen $self
                         return $true
                     }
                     'C' {
                         $self.State.sortBy = "created"
-                        $self.RefreshTaskTable()
+                        & $self.RefreshTaskTable -screen $self
                         return $true
                     }
                 }
@@ -895,9 +886,6 @@ function global:Get-TaskManagementScreen {
             
             return $false
         }
-        
-        # Focus management
-        FocusedComponentName = 'taskTable'
     }
     
     return $screen
@@ -932,6 +920,101 @@ function global:Get-DashboardScreen {
         # Focus management
         FocusedComponentName = "quickActions"
         
+        # Define refresh method directly on the hashtable
+        RefreshData = {
+            param($screen)
+            
+            Write-Log -Level Debug -Message "RefreshData called"
+            
+            try {
+                # Refresh Active Timers
+                if ($global:Data -and $global:Data.ActiveTimers) {
+                    $timerData = @()
+                    foreach ($timerEntry in $global:Data.ActiveTimers.GetEnumerator()) {
+                        $timer = $timerEntry.Value
+                        if ($timer -and $timer.StartTime) {
+                            $elapsed = (Get-Date) - [DateTime]$timer.StartTime
+                            $project = if ($global:Data.Projects -and $timer.ProjectKey) { 
+                                $global:Data.Projects[$timer.ProjectKey].Name 
+                            } else { 
+                                "Unknown" 
+                            }
+                            
+                            $timerData += @{
+                                Project = $project
+                                Time = "{0:00}:{1:00}:{2:00}" -f [Math]::Floor($elapsed.TotalHours), $elapsed.Minutes, $elapsed.Seconds
+                            }
+                        }
+                    }
+                    if ($screen.Components.activeTimers) {
+                        $screen.Components.activeTimers.Data = $timerData
+                    }
+                    Write-Log -Level Debug -Message "Active timers updated: $($timerData.Count) timers"
+                }
+                
+                # Refresh Today's Tasks
+                if ($global:Data -and $global:Data.Tasks) {
+                    $today = (Get-Date).ToString("yyyy-MM-dd")
+                    $taskData = @()
+                    foreach ($task in $global:Data.Tasks) {
+                        if ($task -and -not $task.Completed -and ($task.DueDate -eq $today -or [string]::IsNullOrEmpty($task.DueDate))) {
+                            $project = if ($global:Data.Projects -and $task.ProjectKey) { 
+                                $global:Data.Projects[$task.ProjectKey].Name 
+                            } else { 
+                                "None" 
+                            }
+                            
+                            $taskData += @{
+                                Priority = $task.Priority ?? "Medium"
+                                Description = $task.Description
+                                Project = $project
+                            }
+                        }
+                    }
+                    if ($screen.Components.todaysTasks) {
+                        $screen.Components.todaysTasks.Data = $taskData | Sort-Object Priority, Description
+                    }
+                    Write-Log -Level Debug -Message "Today's tasks updated: $($taskData.Count) tasks"
+                }
+                
+                # Refresh Stats
+                $stats = @{ TodayHours = 0; WeekHours = 0; ActiveTasks = 0; RunningTimers = 0 }
+                
+                if ($global:Data) {
+                    $today = (Get-Date).ToString("yyyy-MM-dd")
+                    
+                    if ($global:Data.TimeEntries) {
+                        $todayEntries = @($global:Data.TimeEntries | Where-Object { $_ -and $_.Date -eq $today })
+                        $stats.TodayHours = [Math]::Round(($todayEntries | Measure-Object -Property Hours -Sum).Sum, 2)
+                        
+                        $weekStart = (Get-Date).AddDays(-[int](Get-Date).DayOfWeek).Date
+                        $weekEntries = @($global:Data.TimeEntries | Where-Object { 
+                            $_ -and $_.Date -and ([DateTime]::Parse($_.Date) -ge $weekStart)
+                        })
+                        $stats.WeekHours = [Math]::Round(($weekEntries | Measure-Object -Property Hours -Sum).Sum, 2)
+                    }
+                    
+                    if ($global:Data.Tasks) {
+                        $stats.ActiveTasks = @($global:Data.Tasks | Where-Object { $_ -and -not $_.Completed }).Count
+                    }
+                    
+                    if ($global:Data.ActiveTimers) {
+                        $stats.RunningTimers = $global:Data.ActiveTimers.Count
+                    }
+                }
+                
+                $screen.State.QuickStats = $stats
+                $screen.Components.todayHoursLabel.Text = "Today: $($stats.TodayHours)h"
+                $screen.Components.weekHoursLabel.Text = "Week: $($stats.WeekHours)h"
+                $screen.Components.activeTasksLabel.Text = "Tasks: $($stats.ActiveTasks)"
+                $screen.Components.runningTimersLabel.Text = "Timers: $($stats.RunningTimers)"
+                
+                Write-Log -Level Debug -Message "Stats updated: Today=$($stats.TodayHours)h, Week=$($stats.WeekHours)h, Tasks=$($stats.ActiveTasks), Timers=$($stats.RunningTimers)"
+            } catch {
+                Write-Log -Level Error -Message "RefreshData error: $_" -Data $_
+            }
+        }
+        
         # 3. Init: One-time setup
         Init = {
             param($self)
@@ -939,14 +1022,17 @@ function global:Get-DashboardScreen {
             Write-Log -Level Debug -Message "Dashboard Init started"
             
             try {
+                # Create a reference to the screen for closures
+                $screenRef = $self
+                
                 # Quick Actions - Simple implementation
                 if (Get-Command New-TuiDataTable -ErrorAction SilentlyContinue) {
                     $self.Components.quickActions = New-TuiDataTable -Props @{
-                    X = 2; Y = 4; Width = 35; Height = 12
-                    IsFocusable = $true
-                    Columns = @(
-                    @{ Name = "Action"; Header = "Quick Actions"; Width = 30 }
-                    )
+                        X = 2; Y = 4; Width = 35; Height = 12
+                        IsFocusable = $true
+                        Columns = @(
+                            @{ Name = "Action"; Header = "Quick Actions"; Width = 30 }
+                        )
                         Data = @(
                             @{ Action = "1. Add Time Entry" }
                             @{ Action = "2. Start Timer" }
@@ -958,6 +1044,9 @@ function global:Get-DashboardScreen {
                         AllowSort = $false
                         AllowFilter = $false
                         MultiSelect = $false
+                        ShowHeader = $false
+                        ShowFooter = $false
+                        Title = "Quick Actions"
                         OnRowSelect = {
                             param($SelectedData, $SelectedIndex)
                             Write-Log -Level Debug -Message "Quick action selected: $SelectedIndex"
@@ -971,6 +1060,10 @@ function global:Get-DashboardScreen {
                             }
                         }
                     }
+                    # Force process data to ensure display
+                    if ($self.Components.quickActions.ProcessData) {
+                        & $self.Components.quickActions.ProcessData -self $self.Components.quickActions
+                    }
                     Write-Log -Level Debug -Message "Quick Actions DataTable created"
                 } else {
                     Write-Log -Level Warning -Message "DataTable component not available, using basic rendering"
@@ -979,16 +1072,18 @@ function global:Get-DashboardScreen {
                 # Active Timers
                 if (Get-Command New-TuiDataTable -ErrorAction SilentlyContinue) {
                     $self.Components.activeTimers = New-TuiDataTable -Props @{
-                    X = 40; Y = 4; Width = 40; Height = 12
-                    IsFocusable = $true
-                    Columns = @(
-                    @{ Name = "Project"; Header = "Project"; Width = 20 }
-                    @{ Name = "Time"; Header = "Time"; Width = 10 }
-                    )
+                        X = 40; Y = 4; Width = 40; Height = 12
+                        IsFocusable = $true
+                        Columns = @(
+                            @{ Name = "Project"; Header = "Project"; Width = 20 }
+                            @{ Name = "Time"; Header = "Time"; Width = 10 }
+                        )
                         Data = @()
                         AllowSort = $false
                         AllowFilter = $false
                         MultiSelect = $false
+                        Title = "Active Timers"
+                        ShowFooter = $false
                     }
                     Write-Log -Level Debug -Message "Active Timers DataTable created"
                 }
@@ -996,17 +1091,19 @@ function global:Get-DashboardScreen {
                 # Today's Tasks
                 if (Get-Command New-TuiDataTable -ErrorAction SilentlyContinue) {
                     $self.Components.todaysTasks = New-TuiDataTable -Props @{
-                    X = 2; Y = 18; Width = 78; Height = 10
-                    IsFocusable = $true
-                    Columns = @(
-                    @{ Name = "Priority"; Header = "Pri"; Width = 8 }
-                    @{ Name = "Description"; Header = "Task"; Width = 50 }
-                    @{ Name = "Project"; Header = "Project"; Width = 15 }
-                    )
+                        X = 2; Y = 18; Width = 78; Height = 10
+                        IsFocusable = $true
+                        Columns = @(
+                            @{ Name = "Priority"; Header = "Pri"; Width = 8 }
+                            @{ Name = "Description"; Header = "Task"; Width = 50 }
+                            @{ Name = "Project"; Header = "Project"; Width = 15 }
+                        )
                         Data = @()
                         AllowSort = $true
                         AllowFilter = $false
                         MultiSelect = $false
+                        Title = "Today's Tasks"
+                        ShowFooter = $false
                     }
                     Write-Log -Level Debug -Message "Today's Tasks DataTable created"
                 }
@@ -1034,103 +1131,8 @@ function global:Get-DashboardScreen {
                 
                 Write-Log -Level Debug -Message "Stats labels created"
                 
-                # Define refresh method
-                $self.RefreshData = {
-                    param($self)
-                    
-                    Write-Log -Level Debug -Message "RefreshData called"
-                    
-                    try {
-                        # Refresh Active Timers
-                        if ($global:Data -and $global:Data.ActiveTimers) {
-                            $timerData = @()
-                            foreach ($timerEntry in $global:Data.ActiveTimers.GetEnumerator()) {
-                                $timer = $timerEntry.Value
-                                if ($timer -and $timer.StartTime) {
-                                    $elapsed = (Get-Date) - [DateTime]$timer.StartTime
-                                    $project = if ($global:Data.Projects -and $timer.ProjectKey) { 
-                                        $global:Data.Projects[$timer.ProjectKey].Name 
-                                    } else { 
-                                        "Unknown" 
-                                    }
-                                    
-                                    $timerData += @{
-                                        Project = $project
-                                        Time = "{0:00}:{1:00}:{2:00}" -f [Math]::Floor($elapsed.TotalHours), $elapsed.Minutes, $elapsed.Seconds
-                                    }
-                                }
-                            }
-                            if ($self.Components.activeTimers) {
-                                $self.Components.activeTimers.Data = $timerData
-                            }
-                            Write-Log -Level Debug -Message "Active timers updated: $($timerData.Count) timers"
-                        }
-                        
-                        # Refresh Today's Tasks
-                        if ($global:Data -and $global:Data.Tasks) {
-                            $today = (Get-Date).ToString("yyyy-MM-dd")
-                            $taskData = @()
-                            foreach ($task in $global:Data.Tasks) {
-                                if ($task -and -not $task.Completed -and ($task.DueDate -eq $today -or [string]::IsNullOrEmpty($task.DueDate))) {
-                                    $project = if ($global:Data.Projects -and $task.ProjectKey) { 
-                                        $global:Data.Projects[$task.ProjectKey].Name 
-                                    } else { 
-                                        "None" 
-                                    }
-                                    
-                                    $taskData += @{
-                                        Priority = $task.Priority ?? "Medium"
-                                        Description = $task.Description
-                                        Project = $project
-                                    }
-                                }
-                            }
-                            if ($self.Components.todaysTasks) {
-                                $self.Components.todaysTasks.Data = $taskData | Sort-Object Priority, Description
-                            }
-                            Write-Log -Level Debug -Message "Today's tasks updated: $($taskData.Count) tasks"
-                        }
-                        
-                        # Refresh Stats
-                        $stats = @{ TodayHours = 0; WeekHours = 0; ActiveTasks = 0; RunningTimers = 0 }
-                        
-                        if ($global:Data) {
-                            $today = (Get-Date).ToString("yyyy-MM-dd")
-                            
-                            if ($global:Data.TimeEntries) {
-                                $todayEntries = @($global:Data.TimeEntries | Where-Object { $_ -and $_.Date -eq $today })
-                                $stats.TodayHours = [Math]::Round(($todayEntries | Measure-Object -Property Hours -Sum).Sum, 2)
-                                
-                                $weekStart = (Get-Date).AddDays(-[int](Get-Date).DayOfWeek).Date
-                                $weekEntries = @($global:Data.TimeEntries | Where-Object { 
-                                    $_ -and $_.Date -and ([DateTime]::Parse($_.Date) -ge $weekStart)
-                                })
-                                $stats.WeekHours = [Math]::Round(($weekEntries | Measure-Object -Property Hours -Sum).Sum, 2)
-                            }
-                            
-                            if ($global:Data.Tasks) {
-                                $stats.ActiveTasks = @($global:Data.Tasks | Where-Object { $_ -and -not $_.Completed }).Count
-                            }
-                            
-                            if ($global:Data.ActiveTimers) {
-                                $stats.RunningTimers = $global:Data.ActiveTimers.Count
-                            }
-                        }
-                        
-                        $self.State.QuickStats = $stats
-                        $self.Components.todayHoursLabel.Text = "Today: $($stats.TodayHours)h"
-                        $self.Components.weekHoursLabel.Text = "Week: $($stats.WeekHours)h"
-                        $self.Components.activeTasksLabel.Text = "Tasks: $($stats.ActiveTasks)"
-                        $self.Components.runningTimersLabel.Text = "Timers: $($stats.RunningTimers)"
-                        
-                        Write-Log -Level Debug -Message "Stats updated: Today=$($stats.TodayHours)h, Week=$($stats.WeekHours)h, Tasks=$($stats.ActiveTasks), Timers=$($stats.RunningTimers)"
-                    } catch {
-                        Write-Log -Level Error -Message "RefreshData error: $_" -Data $_
-                    }
-                }
-                
-                # Initial refresh
-                & $self.RefreshData $self
+                # Initial refresh - call with the screen as parameter
+                & $self.RefreshData -screen $self
                 
             } catch {
                 Write-Log -Level Error -Message "Dashboard Init error: $_" -Data $_
@@ -1144,7 +1146,7 @@ function global:Get-DashboardScreen {
             try {
                 # Auto-refresh check
                 if (([DateTime]::Now - $self.State.LastRefresh).TotalSeconds -gt $self.State.AutoRefreshInterval) {
-                    & $self.RefreshData $self
+                    & $self.RefreshData -screen $self
                     $self.State.LastRefresh = [DateTime]::Now
                 }
                 
@@ -1166,77 +1168,14 @@ function global:Get-DashboardScreen {
                 Write-BufferBox -X 83 -Y 3 -Width 20 -Height 14 -Title " Stats " -BorderColor (Get-ThemeColor "Success")
                 Write-BufferBox -X 1 -Y 17 -Width 80 -Height 12 -Title " Today's Tasks " -BorderColor (Get-ThemeColor "Warning")
                 
-                # Render components or fallback content
-                if ($self.Components.quickActions) {
-                    # Render DataTable components
-                    foreach ($kvp in $self.Components.GetEnumerator()) {
-                        $component = $kvp.Value
-                        if ($component -and $component.Visible -ne $false) {
-                            # Set focus state based on screen's tracking
-                            $component.IsFocused = ($self.FocusedComponentName -eq $kvp.Key)
-                            if ($component.Render) {
-                                & $component.Render -self $component
-                            }
-                        }
-                    }
-                } else {
-                    # Fallback rendering for Quick Actions
-                    Write-BufferString -X 4 -Y 5 -Text "1. Add Time Entry" -ForegroundColor (Get-ThemeColor "Text")
-                    Write-BufferString -X 4 -Y 6 -Text "2. Start Timer" -ForegroundColor (Get-ThemeColor "Text")
-                    Write-BufferString -X 4 -Y 7 -Text "3. Manage Tasks" -ForegroundColor (Get-ThemeColor "Text")
-                    Write-BufferString -X 4 -Y 8 -Text "4. Manage Projects" -ForegroundColor (Get-ThemeColor "Text")
-                    Write-BufferString -X 4 -Y 9 -Text "5. View Reports" -ForegroundColor (Get-ThemeColor "Text")
-                    Write-BufferString -X 4 -Y 10 -Text "6. Settings" -ForegroundColor (Get-ThemeColor "Text")
-                    
-                    # Fallback for Active Timers
-                    if ($self.State.QuickStats.RunningTimers -eq 0) {
-                        Write-BufferString -X 42 -Y 8 -Text "No active timers" -ForegroundColor (Get-ThemeColor "Subtle")
-                    } else {
-                        $y = 5
-                        foreach ($timerEntry in $global:Data.ActiveTimers.GetEnumerator()) {
-                            if ($y -gt 14) { break }
-                            $timer = $timerEntry.Value
-                            if ($timer -and $timer.StartTime) {
-                                $elapsed = (Get-Date) - [DateTime]$timer.StartTime
-                                $project = if ($global:Data.Projects -and $timer.ProjectKey) { 
-                                    $global:Data.Projects[$timer.ProjectKey].Name 
-                                } else { 
-                                    "Unknown" 
-                                }
-                                $timeStr = "{0:00}:{1:00}:{2:00}" -f [Math]::Floor($elapsed.TotalHours), $elapsed.Minutes, $elapsed.Seconds
-                                Write-BufferString -X 42 -Y $y -Text "$project" -ForegroundColor (Get-ThemeColor "Text")
-                                Write-BufferString -X 65 -Y $y -Text $timeStr -ForegroundColor (Get-ThemeColor "Accent")
-                                $y++
-                            }
-                        }
-                    }
-                    
-                    # Fallback for Today's Tasks
-                    if ($self.State.QuickStats.ActiveTasks -eq 0) {
-                        Write-BufferString -X 4 -Y 21 -Text "No tasks for today" -ForegroundColor (Get-ThemeColor "Subtle")
-                    } else {
-                        $y = 19
-                        $today = (Get-Date).ToString("yyyy-MM-dd")
-                        foreach ($task in $global:Data.Tasks) {
-                            if ($y -gt 26) { break }
-                            if ($task -and -not $task.Completed -and ($task.DueDate -eq $today -or [string]::IsNullOrEmpty($task.DueDate))) {
-                                $project = if ($global:Data.Projects -and $task.ProjectKey) { 
-                                    $global:Data.Projects[$task.ProjectKey].Name 
-                                } else { 
-                                    "None" 
-                                }
-                                $taskLine = "[$($task.Priority ?? 'Medium')] $($task.Description) ($project)"
-                                if ($taskLine.Length -gt 76) { $taskLine = $taskLine.Substring(0, 73) + "..." }
-                                Write-BufferString -X 4 -Y $y -Text $taskLine -ForegroundColor (Get-ThemeColor "Text")
-                                $y++
-                            }
-                        }
-                    }
-                    
-                    # Always render stats labels
-                    foreach ($kvp in $self.Components.GetEnumerator()) {
-                        if ($kvp.Key -like "*Label" -and $kvp.Value.Render) {
-                            & $kvp.Value.Render -self $kvp.Value
+                # Render all components
+                foreach ($kvp in $self.Components.GetEnumerator()) {
+                    $component = $kvp.Value
+                    if ($component -and $component.Visible -ne $false) {
+                        # Set focus state based on screen's tracking
+                        $component.IsFocused = ($self.FocusedComponentName -eq $kvp.Key)
+                        if ($component.Render) {
+                            & $component.Render -self $component
                         }
                     }
                 }
@@ -1265,12 +1204,19 @@ function global:Get-DashboardScreen {
                     return $true
                 }
                 
+                # Debug overlay toggle
+                if ($Key.Key -eq [ConsoleKey]::F10) {
+                    $global:TuiState.DebugOverlayEnabled = -not $global:TuiState.DebugOverlayEnabled
+                    Request-TuiRefresh
+                    return $true
+                }
+                
                 # Screen-level shortcuts
                 switch ($Key.Key) {
                     ([ConsoleKey]::R) {
                         # Manual refresh
                         Write-Log -Level Debug -Message "Manual refresh requested"
-                        & $self.RefreshData $self
+                        & $self.RefreshData -screen $self
                         Request-TuiRefresh
                         return $true
                     }
@@ -1326,24 +1272,7 @@ function global:Get-DashboardScreen {
                     return $true
                 }
                 
-                # Arrow key navigation for fallback mode (when DataTable components aren't available)
-                if (-not $self.Components.quickActions -or $self.Components.quickActions.Type -ne "DataTable") {
-                    # Simple fallback navigation
-                    switch ($Key.Key) {
-                        { $_ -in @([ConsoleKey]::UpArrow, [ConsoleKey]::DownArrow) } {
-                            # Simulate basic menu navigation
-                            Write-Log -Level Debug -Message "Arrow key navigation in fallback mode"
-                            Request-TuiRefresh
-                            return $true
-                        }
-                        ([ConsoleKey]::Enter) {
-                            # Enter key to activate menu items (same as number keys)
-                            Write-Log -Level Debug -Message "Enter key in fallback mode"
-                            # Could implement a selectedIndex tracking here
-                            return $true
-                        }
-                    }
-                }
+
                 
                 # Delegate to focused component
                 $focusedComponent = if ($self.FocusedComponentName) { $self.Components[$self.FocusedComponentName] } else { $null }
@@ -1372,7 +1301,7 @@ function global:Get-DashboardScreen {
             param($self)
             Write-Log -Level Debug -Message "Dashboard screen resuming"
             # Refresh data when returning to dashboard
-            & $self.RefreshData $self
+            & $self.RefreshData -screen $self
             
             # Restore focus to the first focusable component
             if (-not $self.FocusedComponentName -or -not $self.Components[$self.FocusedComponentName]) {
@@ -2867,13 +2796,13 @@ function global:Get-TimeEntryFormScreen {
             $self.Components.projectError = New-TuiLabel -Props @{
                 X = $formX + 21; Y = $formY + 5
                 Text = ""
-                ForegroundColor = Red
+                ForegroundColor = [ConsoleColor]::Red
             }
             
             $self.Components.hoursError = New-TuiLabel -Props @{
                 X = $formX + 21; Y = $formY + 8
                 Text = ""
-                ForegroundColor = Red
+                ForegroundColor = [ConsoleColor]::Red
             }
             
             # Focus management
@@ -3165,7 +3094,8 @@ function global:Load-UnifiedData {
     if (Test-Path $script:DataPath) {
         try {
             $jsonContent = Get-Content $script:DataPath -Raw
-            $loadedData = $jsonContent | ConvertFrom-Json -AsHashtable
+            # Use -Depth to ensure deeply nested objects are properly deserialized
+            $loadedData = $jsonContent | ConvertFrom-Json -AsHashtable -Depth 20
             
             # Merge with default structure to ensure all keys exist
             foreach ($key in $loadedData.Keys) {
@@ -3222,8 +3152,9 @@ function global:Save-UnifiedData {
             }
         }
         
-        # Save data
-        $jsonContent = $script:Data | ConvertTo-Json -Depth 10
+        # Save data with increased depth to handle nested objects
+        # Use -Compress to reduce file size and -WarningAction to suppress depth warnings
+        $jsonContent = $script:Data | ConvertTo-Json -Depth 20 -Compress -WarningAction SilentlyContinue
         Set-Content -Path $script:DataPath -Value $jsonContent -Force
         
         $script:LastSaveTime = Get-Date
@@ -4901,6 +4832,7 @@ $script:TuiState = @{
     RenderStats     = @{ LastFrameTime = 0; FrameCount = 0; TotalTime = 0; TargetFPS = 60 }
     Components      = @()
     Layouts         = @{}
+    DebugOverlayEnabled = $false
     FocusedComponent = $null
     
     # Thread-safe input queue and runspace management
@@ -8216,25 +8148,26 @@ function global:New-TuiDataTable {
         # }
         
         ProcessData = {
+            param($self)
             # Filter data
-            if ([string]::IsNullOrWhiteSpace($this.FilterText)) {
-                $this.FilteredData = $this.Data
+            if ([string]::IsNullOrWhiteSpace($self.FilterText)) {
+                $self.FilteredData = $self.Data
             } else {
-                if ($this.FilterColumn) {
+                if ($self.FilterColumn) {
                     # Filter specific column
-                    $this.FilteredData = @($this.Data | Where-Object {
-                        $value = $_."$($this.FilterColumn)"
-                        $value -and $value.ToString() -like "*$($this.FilterText)*"
+                    $self.FilteredData = @($self.Data | Where-Object {
+                        $value = $_."$($self.FilterColumn)"
+                        $value -and $value.ToString() -like "*$($self.FilterText)*"
                     })
                 } else {
                     # Filter all columns
-                    $this.FilteredData = @($this.Data | Where-Object {
+                    $self.FilteredData = @($self.Data | Where-Object {
                         $row = $_
                         $matched = $false
-                        foreach ($col in $this.Columns) {
+                        foreach ($col in $self.Columns) {
                             if ($col.Filterable -ne $false) {
                                 $value = $row."$($col.Name)"
-                                if ($value -and $value.ToString() -like "*$($this.FilterText)*") {
+                                if ($value -and $value.ToString() -like "*$($self.FilterText)*") {
                                     $matched = $true
                                     break
                                 }
@@ -8246,29 +8179,29 @@ function global:New-TuiDataTable {
             }
             
             # Sort data
-            if ($this.SortColumn -and $this.AllowSort) {
-                $this.ProcessedData = $this.FilteredData | Sort-Object -Property $this.SortColumn -Descending:($this.SortDirection -eq "Descending")
+            if ($self.SortColumn -and $self.AllowSort) {
+                $self.ProcessedData = $self.FilteredData | Sort-Object -Property $self.SortColumn -Descending:($self.SortDirection -eq "Descending")
             } else {
-                $this.ProcessedData = $this.FilteredData
+                $self.ProcessedData = $self.FilteredData
             }
             
             # Reset selection if needed
-            if ($this.SelectedRow -ge $this.ProcessedData.Count) {
-                $this.SelectedRow = [Math]::Max(0, $this.ProcessedData.Count - 1)
+            if ($self.SelectedRow -ge $self.ProcessedData.Count) {
+                $self.SelectedRow = [Math]::Max(0, $self.ProcessedData.Count - 1)
             }
             
             # Calculate page size if auto
-            if ($this.PageSize -eq 0) {
-                $headerLines = if ($this.ShowHeader) { 3 } else { 0 }
-                $footerLines = if ($this.ShowFooter) { 2 } else { 0 }
-                $filterLines = if ($this.AllowFilter) { 2 } else { 0 }
-                $this.PageSize = $this.Height - $headerLines - $footerLines - $filterLines - 2
+            if ($self.PageSize -eq 0) {
+                $headerLines = if ($self.ShowHeader) { 3 } else { 0 }
+                $footerLines = if ($self.ShowFooter) { 2 } else { 0 }
+                $filterLines = if ($self.AllowFilter) { 2 } else { 0 }
+                $self.PageSize = $self.Height - $headerLines - $footerLines - $filterLines - 2
             }
             
             # Adjust current page
-            $totalPages = [Math]::Ceiling($this.ProcessedData.Count / [Math]::Max(1, $this.PageSize))
-            if ($this.CurrentPage -ge $totalPages) {
-                $this.CurrentPage = [Math]::Max(0, $totalPages - 1)
+            $totalPages = [Math]::Ceiling($self.ProcessedData.Count / [Math]::Max(1, $self.PageSize))
+            if ($self.CurrentPage -ge $totalPages) {
+                $self.CurrentPage = [Math]::Max(0, $totalPages - 1)
             }
         }
         
@@ -8276,7 +8209,7 @@ function global:New-TuiDataTable {
             param($self)
             
             # Process data first
-            & $self.ProcessData
+            & $self.ProcessData -self $self
             
             $borderColor = if ($self.IsFocusable -and $self.IsFocused) { 
                 Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan)
@@ -8528,7 +8461,7 @@ function global:New-TuiDataTable {
                                 $currentIdx = [array]::IndexOf($sortableCols.Name, $self.SortColumn)
                                 $nextIdx = ($currentIdx + 1) % $sortableCols.Count
                                 $self.SortColumn = $sortableCols[$nextIdx].Name
-                                & $self.ProcessData
+                                & $self.ProcessData -self $self
                                 Request-TuiRefresh
                             }
                         }
@@ -8562,14 +8495,14 @@ function global:New-TuiDataTable {
                     }
                     ([ConsoleKey]::Enter) {
                         $self.FilterMode = $false
-                        & $self.ProcessData
+                        & $self.ProcessData -self $self
                         Request-TuiRefresh
                         return $true
                     }
                     ([ConsoleKey]::Backspace) {
                         if ($self.FilterText.Length -gt 0) {
                             $self.FilterText = $self.FilterText.Substring(0, $self.FilterText.Length - 1)
-                            & $self.ProcessData
+                            & $self.ProcessData -self $self
                             Request-TuiRefresh
                         }
                         return $true
@@ -8577,7 +8510,7 @@ function global:New-TuiDataTable {
                     default {
                         if ($Key.KeyChar -and -not [char]::IsControl($Key.KeyChar)) {
                             $self.FilterText += $Key.KeyChar
-                            & $self.ProcessData
+                            & $self.ProcessData -self $self
                             Request-TuiRefresh
                             return $true
                         }
@@ -8661,7 +8594,7 @@ function global:New-TuiDataTable {
                         } else {
                             $self.SortDirection = "Ascending"
                         }
-                        & $self.ProcessData
+                        & $self.ProcessData -self $self
                         Request-TuiRefresh
                     }
                     return $true
@@ -8698,7 +8631,7 @@ function global:New-TuiDataTable {
                                     $self.SortColumn = $col.Name
                                     $self.SortDirection = "Ascending"
                                 }
-                                & $self.ProcessData
+                                & $self.ProcessData -self $self
                                 Request-TuiRefresh
                             }
                         }
@@ -8712,25 +8645,23 @@ function global:New-TuiDataTable {
         
         # Public methods
         RefreshData = {
-            & $this.ProcessData
+            param($self)
+            & $self.ProcessData -self $self
             Request-TuiRefresh
         }
         
-        # Initialize data processing
-        & $component.ProcessData
-        
         SetFilter = {
-            param($FilterText, $FilterColumn)
-            $this.FilterText = $FilterText
-            $this.FilterColumn = $FilterColumn
-            & $this.ProcessData
+            param($self, $FilterText, $FilterColumn)
+            $self.FilterText = $FilterText
+            $self.FilterColumn = $FilterColumn
+            & $self.ProcessData -self $self
             Request-TuiRefresh
         }
         
         ExportData = {
-            param($Format = "CSV", $FilePath)
+            param($self, $Format = "CSV", $FilePath)
             
-            $exportData = if ($this.FilterText) { $this.ProcessedData } else { $this.Data }
+            $exportData = if ($self.FilterText) { $self.ProcessedData } else { $self.Data }
             
             switch ($Format.ToUpper()) {
                 "CSV" {
@@ -8742,14 +8673,14 @@ function global:New-TuiDataTable {
                 "HTML" {
                     # Simple HTML table export
                     $html = "<table border='1'><tr>"
-                    foreach ($col in $this.Columns) {
+                    foreach ($col in $self.Columns) {
                         $html += "<th>$($col.Header ?? $col.Name)</th>"
                     }
                     $html += "</tr>"
                     
                     foreach ($row in $exportData) {
                         $html += "<tr>"
-                        foreach ($col in $this.Columns) {
+                        foreach ($col in $self.Columns) {
                             $value = $row."$($col.Name)"
                             $html += "<td>$value</td>"
                         }
@@ -8762,6 +8693,9 @@ function global:New-TuiDataTable {
             }
         }
     }
+    
+    # Initialize data processing after component is created
+    & $component.ProcessData -self $component
     
     return $component
 }
@@ -8798,6 +8732,7 @@ function global:New-TuiTreeView {
         # }
         
         FlattenTree = {
+            param($self)
             $flattened = @()
             
             $processNode = {
@@ -8806,7 +8741,7 @@ function global:New-TuiTreeView {
                 $node.Parent = $Parent
                 $node.Level = $Level
                 
-                if ($this.ShowRoot -or $Level -gt 0) {
+                if ($self.ShowRoot -or $Level -gt 0) {
                     $flattened += $Node
                 }
                 
@@ -8817,15 +8752,15 @@ function global:New-TuiTreeView {
                 }
             }
             
-            & $processNode $this.RootNode 0 $null
-            $this.FlattenedNodes = $flattened
+            & $processNode $self.RootNode 0 $null
+            $self.FlattenedNodes = $flattened
         }
         
         Render = {
             param($self)
             
             # Flatten tree first
-            & $self.FlattenTree
+            & $self.FlattenTree -self $self
             
             $borderColor = if ($self.IsFocused) { 
                 Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan)
@@ -9043,7 +8978,7 @@ function global:New-TuiTreeView {
         
         # Public methods
         AddNode = {
-            param($ParentNode, $NewNode)
+            param($self, $ParentNode, $NewNode)
             if (-not $ParentNode.Children) {
                 $ParentNode.Children = @()
             }
@@ -9053,18 +8988,18 @@ function global:New-TuiTreeView {
         }
         
         RemoveNode = {
-            param($Node)
+            param($self, $Node)
             if ($Node.Parent) {
                 $Node.Parent.Children = @($Node.Parent.Children | Where-Object { $_ -ne $Node })
-                if ($this.SelectedNode -eq $Node) {
-                    $this.SelectedNode = $Node.Parent
+                if ($self.SelectedNode -eq $Node) {
+                    $self.SelectedNode = $Node.Parent
                 }
                 Request-TuiRefresh
             }
         }
         
         FindNode = {
-            param($Predicate)
+            param($self, $Predicate)
             
             $find = {
                 param($Node)
@@ -9076,7 +9011,7 @@ function global:New-TuiTreeView {
                 return $null
             }
             
-            return & $find $this.RootNode
+            return & $find $self.RootNode
         }
     }
     

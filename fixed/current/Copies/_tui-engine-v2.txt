@@ -18,6 +18,7 @@ $script:TuiState = @{
     RenderStats     = @{ LastFrameTime = 0; FrameCount = 0; TotalTime = 0; TargetFPS = 60 }
     Components      = @()
     Layouts         = @{}
+    DebugOverlayEnabled = $false
     FocusedComponent = $null
     
     # Thread-safe input queue and runspace management

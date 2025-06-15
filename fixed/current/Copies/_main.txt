@@ -18,7 +18,7 @@ $script:ModulesToLoad = @(
     @{ Name = "dialog-system"; Path = "modules\dialog-system.psm1"; Required = $true },
     @{ Name = "tui-components"; Path = "components\tui-components.psm1"; Required = $true },
     @{ Name = "advanced-input-components"; Path = "components\advanced-input-components.psm1"; Required = $false },
-    @{ Name = "advanced-data-components"; Path = "components\advanced-data-components.psm1"; Required = $false },
+    @{ Name = "advanced-data-components"; Path = "components\advanced-data-components.psm1"; Required = $true },
     @{ Name = "layout-manager"; Path = "utilities\layout-manager.psm1"; Required = $false },
     @{ Name = "positioning-helper"; Path = "utilities\positioning-helper.psm1"; Required = $false },
     @{ Name = "focus-manager"; Path = "utilities\focus-manager.psm1"; Required = $false },
@@ -255,9 +255,12 @@ function Start-PMCTerminal {
         
         if ($Data -and (Get-Command -Name "Save-UnifiedData" -ErrorAction SilentlyContinue)) {
             if (-not $Silent) {
-                Write-Host "Saving data..." -ForegroundColor Yellow
+                Write-Host "`nSaving data..." -ForegroundColor Yellow -NoNewline
             }
             Save-UnifiedData
+            if (-not $Silent) {
+                Write-Host " Done!" -ForegroundColor Green
+            }
         }
         
         if (-not $Silent) {
