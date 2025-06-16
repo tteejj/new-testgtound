@@ -144,3 +144,17 @@ Result: Form components properly contained, no duplicate rendering, focus should
 - Issue: Tab key does not move focus between form fields
 - Root cause: Get-NextFocusableComponent checking wrong properties (CanFocus, IsEnabled, IsVisible)
 - Fix: Update to check correct properties (IsFocusable, Visible) matching component definitions
+
+## June 16, 2025 - Helios v4.2 Architecture Refactor
+- Issue: Global variables, no dependency injection, manual state management, no testing infrastructure
+- Root causes: Original architecture lacked service abstraction, used globals for cross-cutting concerns
+- Fixes Applied:
+  1. Created service layer (app-store, navigation, keybindings) with dependency injection
+  2. Implemented Redux-like centralized state management with subscriptions
+  3. Added declarative layout system (GridPanel, StackPanel) replacing manual positioning
+  4. Enhanced focus manager with scope support and proper event integration
+  5. Created PowerShell module manifests for all services
+  6. Added Pester test framework with comprehensive test examples
+  7. Refactored dashboard and task screens to use new architecture
+  8. Eliminated all global service variables in favor of $Services registry
+- Result: Scalable, testable, maintainable architecture with clear separation of concerns

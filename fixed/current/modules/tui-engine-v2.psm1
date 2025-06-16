@@ -383,9 +383,14 @@ function Process-SingleKeyInput {
     param($keyInfo)
     
     try {
-        # Tab navigation handled globally
+        # Tab navigation handled by focus manager if available
         if ($keyInfo.Key -eq [ConsoleKey]::Tab) {
-            Handle-TabNavigation -Reverse ($keyInfo.Modifiers -band [ConsoleModifiers]::Shift)
+            if (Get-Command -Name "Move-Focus" -ErrorAction SilentlyContinue) {
+                Move-Focus -Reverse ($keyInfo.Modifiers -band [ConsoleModifiers]::Shift)
+            } else {
+                # Fallback to old tab navigation
+                Handle-TabNavigation -Reverse ($keyInfo.Modifiers -band [ConsoleModifiers]::Shift)
+            }
             return
         }
         
@@ -394,8 +399,14 @@ function Process-SingleKeyInput {
             return
         }
         
+        # Get focused component from focus manager if available
+        $focusedComponent = if (Get-Command -Name "Get-FocusedComponent" -ErrorAction SilentlyContinue) {
+            Get-FocusedComponent
+        } else {
+            $script:TuiState.FocusedComponent
+        }
+        
         # Focused component gets the next chance
-        $focusedComponent = $script:TuiState.FocusedComponent
         if ($focusedComponent -and $focusedComponent.HandleInput) {
             try {
                 if (& $focusedComponent.HandleInput -self $focusedComponent -Key $keyInfo) {
