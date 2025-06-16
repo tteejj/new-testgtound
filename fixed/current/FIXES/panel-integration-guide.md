@@ -18,7 +18,7 @@ function global:New-TuiPanel {
         Width = $Props.Width ?? 40
         Height = $Props.Height ?? 20
         Visible = $Props.Visible ?? $true
-        IsFocusable = $Props.IsFocusable ?? $false
+        IsFocusable = $Props.IsFocusable ?? $false # Note: IsFocusable is part of the actual component, not just simple-panel
         Children = @()
         
         # Layout properties
@@ -29,7 +29,9 @@ function global:New-TuiPanel {
         ShowBorder = $Props.ShowBorder ?? $false
         Title = $Props.Title
         
-        # ... rest of the implementation from simple-panel-component.ps1
+        # Core methods like AddChild, _RecalculateLayout, Render, HandleInput
+        # are part of the full implementation in tui-components.psm1.
+        # This example shows the basic property structure.
     }
     
     return $component
