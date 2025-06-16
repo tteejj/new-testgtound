@@ -108,6 +108,12 @@ function global:Get-TaskManagementScreenLayout {
 
         # Focus first field
         $screen.FocusedComponentName = 'formTitle'
+        if ($screen.Components[$screen.FocusedComponentName]) {
+            $screen.Components[$screen.FocusedComponentName].IsFocused = $true
+            if (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue) {
+                Set-ComponentFocus -Component $screen.Components[$screen.FocusedComponentName]
+            }
+        }
         Request-TuiRefresh
     }
 
@@ -144,6 +150,186 @@ function global:Get-TaskManagementScreenLayout {
         $screen.Components.formPanel.Title = " Edit Task "
 
         & $showFormLogic -screen $screen
+    }
+
+    # --- OVERRIDE HideForm ---
+    $screen.HideForm = {
+        param($screen)
+        $screen.State.showingForm = $false
+
+        if (Get-Command Clear-ComponentFocus -ErrorAction SilentlyContinue) {
+            Clear-ComponentFocus
+        }
+
+        $screen.Components.formPanel.Visible = $false
+
+        # Make form components non-focusable
+        $formFields = @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')
+        foreach ($field in $formFields) {
+            if ($screen.Components[$field]) {
+                $screen.Components[$field].IsFocusable = $false
+                $screen.Components[$field].IsFocused = $false # Explicitly remove focus state
+            }
+        }
+
+        if ($screen.Components.taskTable) {
+            $screen.Components.taskTable.Visible = $true
+            $screen.Components.taskTable.IsFocusable = $true
+            # $screen.Components.taskTable.IsFocused = $true # Let the engine handle this on next interaction
+        }
+        $screen.FocusedComponentName = 'taskTable' # Set logical focus back to table
+
+        # Set actual TUI engine focus to the table
+        if ($screen.Components.taskTable -and (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue)) {
+            Set-ComponentFocus -Component $screen.Components.taskTable
+        }
+
+        $global:TuiState.RenderStats.FrameCount = 0 # Force full refresh
+        Request-TuiRefresh
+    }
+
+    # --- OVERRIDE HandleInput ---
+    $screen.HandleInput = {
+        param($self, $Key)
+
+        if ($self.State.showingForm) {
+            # Handle form navigation
+            switch ($Key.Key) {
+                ([ConsoleKey]::Escape) {
+                    & $self.HideForm -screen $self
+                    return $true
+                }
+                ([ConsoleKey]::Tab) {
+                    $formFields = @('formTitle', 'formDescription', 'formCategory', 'formPriority', 'formDueDate', 'formSaveButton', 'formCancelButton')
+
+                    # Filter for currently visible and focusable fields (should be all of them when form is shown)
+                    $visibleFocusableFields = $formFields | Where-Object {
+                        $component = $self.Components[$_]
+                        $component -and $component.Visible -ne $false -and $component.IsFocusable -ne $false
+                    }
+
+                    if ($visibleFocusableFields.Count -gt 0) {
+                        $currentIndex = [array]::IndexOf($visibleFocusableFields, $self.FocusedComponentName)
+                        if ($currentIndex -eq -1) { # If current focused component is not in the list or not found
+                            $currentIndex = 0 # Default to the first component
+                        }
+
+                        # Clear IsFocused from the current component
+                        if ($self.Components[$self.FocusedComponentName]) {
+                            $self.Components[$self.FocusedComponentName].IsFocused = $false
+                        }
+
+                        if ($Key.Modifiers -band [ConsoleModifiers]::Shift) {
+                            # Shift+Tab - go backwards
+                            $nextIndex = ($currentIndex - 1 + $visibleFocusableFields.Count) % $visibleFocusableFields.Count
+                        } else {
+                            # Tab - go forwards
+                            $nextIndex = ($currentIndex + 1) % $visibleFocusableFields.Count
+                        }
+
+                        $self.FocusedComponentName = $visibleFocusableFields[$nextIndex]
+                        $focusedComponent = $self.Components[$self.FocusedComponentName]
+
+                        if ($focusedComponent) {
+                            $focusedComponent.IsFocused = $true
+                            if (Get-Command Set-ComponentFocus -ErrorAction SilentlyContinue) {
+                                Set-ComponentFocus -Component $focusedComponent
+                            }
+                        }
+                    }
+                    Request-TuiRefresh
+                    return $true
+                }
+            }
+
+            # Delegate input to the currently focused form component
+            $focusedComponent = $self.Components[$self.FocusedComponentName]
+            if ($focusedComponent -and $focusedComponent.HandleInput) {
+                $result = & $focusedComponent.HandleInput -self $focusedComponent -Key $Key
+                if ($result) {
+                    Request-TuiRefresh # Ensure refresh if child component handled input
+                    return $true
+                }
+            }
+            return $false # Input not handled by form navigation or focused child
+        }
+
+        # If form is not showing, fall back to the base screen's HandleInput logic
+        # This requires capturing the original HandleInput from the base screen
+        # For this subtask, we'll assume the base HandleInput is not needed for non-form interactions
+        # or that it will be added back if necessary.
+        # For now, let's add the non-form input handling from the original task-screen.psm1 directly.
+
+        # Handle list navigation (copied from original task-screen.psm1)
+        switch ($Key.Key) {
+            ([ConsoleKey]::H) {
+                $self.State.showHelp = -not $self.State.showHelp
+                Request-TuiRefresh
+                return $true
+            }
+            ([ConsoleKey]::Q) { return "Back" }
+            ([ConsoleKey]::Escape) {
+                if ($self.State.showHelp) {
+                    $self.State.showHelp = $false
+                    Request-TuiRefresh
+                    return $true
+                }
+                return "Back"
+            }
+            ([ConsoleKey]::Spacebar) {
+                # Ensure taskTable is the target if form isn't shown
+                 if ($self.Components.taskTable.Visible) {
+                    & $self.ToggleTaskStatus -screen $self # This method is on the base screen
+                 }
+                return $true
+            }
+        }
+
+        # Handle key characters (copied from original task-screen.psm1)
+        if ($Key.KeyChar) {
+            switch ($Key.KeyChar.ToString().ToUpper()) {
+                'N' {
+                    & $self.ShowAddTaskForm -screen $self
+                    return $true
+                }
+                'E' {
+                    if ($self.Components.taskTable.Visible) {
+                        $selectedRow = $self.Components.taskTable.SelectedRow
+                        if ($selectedRow -ge 0 -and $selectedRow -lt $self.Components.taskTable.ProcessedData.Count) {
+                            $taskData = $self.Components.taskTable.ProcessedData[$selectedRow]
+                            & $self.ShowEditTaskForm -screen $self -taskId $taskData.Id
+                        }
+                    }
+                    return $true
+                }
+                'D' {
+                     if ($self.Components.taskTable.Visible) {
+                        & $self.DeleteTask -screen $self # This method is on the base screen
+                     }
+                    return $true
+                }
+                '1' { $self.State.filter = "all"; & $self.RefreshTaskTable -screen $self; return $true }
+                '2' { $self.State.filter = "active"; & $self.RefreshTaskTable -screen $self; return $true }
+                '3' { $self.State.filter = "completed"; & $self.RefreshTaskTable -screen $self; return $true }
+                'P' { $self.State.sortBy = "priority"; & $self.RefreshTaskTable -screen $self; return $true }
+                'U' { $self.State.sortBy = "dueDate"; & $self.RefreshTaskTable -screen $self; return $true }
+                'C' { $self.State.sortBy = "created"; & $self.RefreshTaskTable -screen $self; return $true }
+            }
+        }
+
+        # Delegate to task table if visible and no other actions taken
+        if ($self.Components.taskTable.Visible -and $self.Components.taskTable.HandleInput) {
+            # Ensure taskTable is marked as focused if it's the intended target
+            if ($self.FocusedComponentName -eq 'taskTable') {
+                 $self.Components.taskTable.IsFocused = $true
+            }
+            $result = & $self.Components.taskTable.HandleInput -self $self.Components.taskTable -Key $Key
+            if ($result) {
+                Request-TuiRefresh
+                return $true
+            }
+        }
+        return $false
     }
 
     return $screen
