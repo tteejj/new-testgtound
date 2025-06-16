@@ -175,18 +175,35 @@ function global:New-TuiDataTable {
                 $currentY += 2
             }
             
-            # Calculate column widths
+            # Calculate column widths - FIXED VERSION
             $totalDefinedWidth = ($self.Columns | Where-Object { $_.Width } | Measure-Object -Property Width -Sum).Sum ?? 0
             $flexColumns = @($self.Columns | Where-Object { -not $_.Width })
-            $columnSeparators = [Math]::Max(0, $self.Columns.Count - 1)  # Space between columns
+            $columnSeparators = if ($self.Columns.Count -gt 1) { $self.Columns.Count - 1 } else { 0 }  # Only add separators if multiple columns
             $remainingWidth = $innerWidth - $totalDefinedWidth - ($self.ShowRowNumbers ? 5 : 0) - $columnSeparators
-            $flexWidth = if ($flexColumns.Count -gt 0) { [Math]::Floor($remainingWidth / $flexColumns.Count) } else { 0 }
             
-            foreach ($col in $flexColumns) {
-                $col.CalculatedWidth = [Math]::Max(5, $flexWidth)
+            # CRITICAL FIX: Ensure flex columns get adequate width, especially for single-column tables
+            if ($flexColumns.Count -eq 1 -and $self.Columns.Count -eq 1) {
+                # Single flex column should use full available width
+                $flexWidth = $remainingWidth
+            } elseif ($flexColumns.Count -gt 0) {
+                $flexWidth = [Math]::Floor($remainingWidth / $flexColumns.Count)
+            } else {
+                $flexWidth = 0
             }
-            foreach ($col in $self.Columns | Where-Object { $_.Width }) {
-                $col.CalculatedWidth = $_.Width
+            
+            # Assign calculated widths
+            foreach ($col in $self.Columns) {
+                if ($col.Width) {
+                    $col.CalculatedWidth = $col.Width
+                } else {
+                    # For the Quick Actions single column, ensure it gets proper width
+                    if ($self.Title -eq "Quick Actions" -and $self.Columns.Count -eq 1) {
+                        # Table width 35, minus 2 for borders if ShowBorder=false (but content area already adjusted)
+                        $col.CalculatedWidth = $innerWidth - 1  # Leave 1 space for safety
+                    } else {
+                        $col.CalculatedWidth = [Math]::Max(5, $flexWidth)
+                    }
+                }
             }
             
             # Header

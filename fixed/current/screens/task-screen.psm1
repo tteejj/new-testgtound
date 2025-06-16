@@ -81,6 +81,13 @@ function global:Get-TaskManagementScreen {
             
             $isEditing = $null -ne $taskId
             
+            # Get form components through helper
+            $titleField = & $screen.GetFormComponent -screen $screen -name "formTitle"
+            $descField = & $screen.GetFormComponent -screen $screen -name "formDescription"
+            $catField = & $screen.GetFormComponent -screen $screen -name "formCategory"
+            $priField = & $screen.GetFormComponent -screen $screen -name "formPriority"
+            $dueField = & $screen.GetFormComponent -screen $screen -name "formDueDate"
+            
             if ($isEditing) {
                 $task = $screen.State.tasks | Where-Object { $_.Id -eq $taskId }
                 if (-not $task) {
@@ -89,38 +96,40 @@ function global:Get-TaskManagementScreen {
                 }
                 $screen.State.editingTaskId = $task.Id
                 $screen.Components.formPanel.Title = " Edit Task "
-                # Populate form fields from existing task
-                $screen.Components.formTitle.Text = $task.Title
-                $screen.Components.formDescription.Text = $task.Description
-                $screen.Components.formCategory.Value = $task.Category
-                $screen.Components.formPriority.Value = $task.Priority
-                $screen.Components.formDueDate.Value = try { [DateTime]::Parse($task.DueDate) } catch { Get-Date }
+                # Populate form fields
+                $titleField.Text = $task.Title
+                $descField.Text = $task.Description
+                $catField.Value = $task.Category
+                $priField.Value = $task.Priority
+                $dueField.Value = try { [DateTime]::Parse($task.DueDate) } catch { Get-Date }
             } else {
                 $screen.State.editingTaskId = $null
                 $screen.Components.formPanel.Title = " New Task "
-                # Clear form fields for new task
-                $screen.Components.formTitle.Text = ""
-                $screen.Components.formDescription.Text = ""
-                $screen.Components.formCategory.Value = "Work"
-                $screen.Components.formPriority.Value = "Medium"
-                $screen.Components.formDueDate.Value = (Get-Date).AddDays(7)
+                # Clear form fields
+                $titleField.Text = ""
+                $descField.Text = ""
+                $catField.Value = "Work"
+                $priField.Value = "Medium"
+                $dueField.Value = (Get-Date).AddDays(7)
             }
 
-            # This is now the ONLY logic needed to show the form.
-            # The robust Panel component handles all child visibility.
             $screen.State.showingForm = $true
-            $screen.Components.formPanel.Visible = $true
+            
+            # Use the Panel's Show method to properly show it and all children
+            & $screen.Components.formPanel.Show -self $screen.Components.formPanel
             $screen.Components.taskTable.Visible = $false
             
-            # Tell the TUI Engine to handle the focus change.
-            Set-ComponentFocus -Component $screen.Components.formTitle
+            # Focus the title field
+            Set-ComponentFocus -Component $titleField
         }
 
         # In _task-screen.txt
 HideForm = {
     param($screen)
     $screen.State.showingForm = $false
-    $screen.Components.formPanel.Visible = $false
+    
+    # Use the Panel's Hide method to properly hide it and all children
+    & $screen.Components.formPanel.Hide -self $screen.Components.formPanel
     $screen.Components.taskTable.Visible = $true
     
     # Restore focus to the main table
@@ -135,13 +144,20 @@ HideForm = {
         
         SaveTask = {
             param($screen)
-            # Get current values directly from components
+            
+            # Get form components through helper
+            $titleField = & $screen.GetFormComponent -screen $screen -name "formTitle"
+            $descField = & $screen.GetFormComponent -screen $screen -name "formDescription"
+            $catField = & $screen.GetFormComponent -screen $screen -name "formCategory"
+            $priField = & $screen.GetFormComponent -screen $screen -name "formPriority"
+            $dueField = & $screen.GetFormComponent -screen $screen -name "formDueDate"
+            
             $formData = @{
-                Title       = $screen.Components.formTitle.Text
-                Description = $screen.Components.formDescription.Text
-                Category    = $screen.Components.formCategory.Value
-                Priority    = $screen.Components.formPriority.Value
-                DueDate     = $screen.Components.formDueDate.Value
+                Title       = $titleField.Text
+                Description = $descField.Text
+                Category    = $catField.Value
+                Priority    = $priField.Value
+                DueDate     = $dueField.Value
             }
             
             $editingId = $screen.State.editingTaskId
@@ -249,52 +265,83 @@ HideForm = {
                 Visible = $false # The panel and all its children start hidden.
             }
             
-            # Create form components. Their visibility is now controlled by their parent panel.
-            $self.Components.formTitle = New-TuiTextBox -Props @{
-                Width = 54; Height = 3; IsFocusable = $true
-                Props = @{ Label = "Title:" }
-            }
-            $self.Components.formDescription = New-TuiTextArea -Props @{
-                Width = 54; Height = 5; IsFocusable = $true
-                Props = @{ Label = "Description:" }
-            }
-            $self.Components.formCategory = New-TuiDropdown -Props @{
-                Width = 25; Height = 3; IsFocusable = $true
-                Options = $self.State.categories | ForEach-Object { @{ Display = $_; Value = $_ } }
-                Props = @{ Label = "Category:" }
-            }
-            $self.Components.formPriority = New-TuiDropdown -Props @{
-                Width = 25; Height = 3; IsFocusable = $true
-                Options = @("Critical", "High", "Medium", "Low") | ForEach-Object { @{ Display = $_; Value = $_ } }
-                Props = @{ Label = "Priority:" }
-            }
-            $self.Components.formDueDate = New-TuiDatePicker -Props @{
-                Width = 25; Height = 3; IsFocusable = $true
-                Props = @{ Label = "Due Date:" }
-            }
-            $self.Components.formSaveButton = New-TuiButton -Props @{
-                Width = 15; Height = 3; Text = "Save"; IsFocusable = $true
-                OnClick = { & $self.SaveTask -screen $self }
-            }
-            $self.Components.formCancelButton = New-TuiButton -Props @{
-                Width = 15; Height = 3; Text = "Cancel"; IsFocusable = $true
-                OnClick = { & $self.HideForm -screen $self }
+            # Add helper method to find form components
+            $self.GetFormComponent = {
+                param($screen, $name)
+                foreach ($child in $screen.Components.formPanel.Children) {
+                    if ($child.Name -eq $name) { return $child }
+                    if ($child.Children) {
+                        foreach ($subchild in $child.Children) {
+                            if ($subchild.Name -eq $name) { return $subchild }
+                        }
+                    }
+                }
+                return $null
             }
             
-            # Add components to the panel using the AddChild method.
-            # The panel will automatically manage their position and rendering.
-            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiLabel -Props @{ Text = "Title:" })
-            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $self.Components.formTitle
-            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiLabel -Props @{ Text = "Description:" })
-            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $self.Components.formDescription
-            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiLabel -Props @{ Text = "Category:" })
-            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $self.Components.formCategory
-            # ... For brevity, other components would be added similarly ...
-            # You can also create a horizontal panel for buttons
-            $buttonPanel = New-TuiPanel -Props @{ Layout = 'Stack'; Orientation = 'Horizontal'; Spacing = 2 }
-            & $buttonPanel.AddChild -self $buttonPanel -Child $self.Components.formSaveButton
-            & $buttonPanel.AddChild -self $buttonPanel -Child $self.Components.formCancelButton
+            # Create and add form components ONLY to the panel
+            # Title field
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiLabel -Props @{ 
+                Text = "Title:"; Height = 1; Name = "titleLabel"
+            })
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiTextBox -Props @{
+                Width = 54; Height = 3; IsFocusable = $true; Name = "formTitle"
+            })
+            
+            # Description field
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiLabel -Props @{ 
+                Text = "Description:"; Height = 1; Name = "descLabel"
+            })
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiTextArea -Props @{
+                Width = 54; Height = 5; IsFocusable = $true; Name = "formDescription"
+            })
+            
+            # Category dropdown
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiLabel -Props @{ 
+                Text = "Category:"; Height = 1; Name = "catLabel"
+            })
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiDropdown -Props @{
+                Width = 25; Height = 3; IsFocusable = $true; Name = "formCategory"
+                Options = $self.State.categories | ForEach-Object { @{ Display = $_; Value = $_ } }
+                Value = "Work"
+            })
+            
+            # Priority dropdown
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiLabel -Props @{ 
+                Text = "Priority:"; Height = 1; Name = "priLabel"
+            })
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiDropdown -Props @{
+                Width = 25; Height = 3; IsFocusable = $true; Name = "formPriority"
+                Options = @("Critical", "High", "Medium", "Low") | ForEach-Object { @{ Display = $_; Value = $_ } }
+                Value = "Medium"
+            })
+            
+            # Due date picker
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiLabel -Props @{ 
+                Text = "Due Date:"; Height = 1; Name = "dueLabel"
+            })
+            & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiDatePicker -Props @{
+                Width = 25; Height = 3; IsFocusable = $true; Name = "formDueDate"
+                Value = (Get-Date).AddDays(7)
+            })
+            
+            # Button panel
+            $buttonPanel = New-TuiPanel -Props @{ 
+                Layout = 'Stack'; Orientation = 'Horizontal'; Spacing = 2; Height = 3
+                ShowBorder = $false; Name = "buttonPanel"
+            }
+            & $buttonPanel.AddChild -self $buttonPanel -Child (New-TuiButton -Props @{
+                Width = 15; Height = 3; Text = "Save"; IsFocusable = $true; Name = "formSaveButton"
+                OnClick = { & $self.SaveTask -screen $self }
+            })
+            & $buttonPanel.AddChild -self $buttonPanel -Child (New-TuiButton -Props @{
+                Width = 15; Height = 3; Text = "Cancel"; IsFocusable = $true; Name = "formCancelButton"
+                OnClick = { & $self.HideForm -screen $self }
+            })
             & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child $buttonPanel
+            
+            # CRITICAL: Ensure panel and all children are hidden at startup
+            & $self.Components.formPanel.Hide -self $self.Components.formPanel
         }
         
         # 4. RENDER: Draw the screen and its components
@@ -311,8 +358,11 @@ HideForm = {
             }
             
             # Render all top-level components. The Panel will handle rendering its own children.
-            foreach ($component in $self.Components.Values) {
-                if ($component.Render) {
+            foreach ($kvp in $self.Components.GetEnumerator()) {
+                $component = $kvp.Value
+                # CRITICAL FIX: Only render components that don't have a parent
+                # This prevents child components from being rendered outside their parent's control
+                if ($component -and $component.Render -and -not $component.Parent) {
                     & $component.Render -self $component
                 }
             }

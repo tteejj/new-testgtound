@@ -1274,6 +1274,36 @@ function global:New-TuiPanel {
             }
         }
         
+        # --- Public Method: Show ---
+        # Recursively makes the panel and all its children visible.
+        Show = {
+            param($self)
+            $self.Visible = $true
+            foreach ($child in $self.Children) {
+                # Check if the child is a Panel itself and call its Show method,
+                # otherwise just set its Visible property.
+                if ($child.Show) {
+                    & $child.Show -self $child
+                } else {
+                    $child.Visible = $true
+                }
+            }
+        }
+        
+        # --- Public Method: Hide ---
+        # Recursively makes the panel and all its children invisible.
+        Hide = {
+            param($self)
+            $self.Visible = $false
+            foreach ($child in $self.Children) {
+                if ($child.Hide) {
+                    & $child.Hide -self $child
+                } else {
+                    $child.Visible = $false
+                }
+            }
+        }
+        
         # --- Input Handling ---
         HandleInput = {
             param($self, $Key)
