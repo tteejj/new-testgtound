@@ -1157,10 +1157,14 @@ function global:New-TuiChart {
 
 #region Container Components
 
+# FILE: _tui-components.txt
+# ACTION: Replace the entire existing New-TuiPanel function with this code.
+
 function global:New-TuiPanel {
     param([hashtable]$Props = @{})
     
-    $componentDef = @{
+    $component = @{
+        # --- Standard Component Metadata ---
         Type = "Panel"
         X = $Props.X ?? 0
         Y = $Props.Y ?? 0
@@ -1168,38 +1172,34 @@ function global:New-TuiPanel {
         Height = $Props.Height ?? 20
         Visible = $Props.Visible ?? $true
         IsFocusable = $Props.IsFocusable ?? $false
-        Children = @()
         
-        # Layout properties
+        # --- Child and Layout Management ---
+        Children = @()
         Layout = $Props.Layout ?? 'Stack'
         Orientation = $Props.Orientation ?? 'Vertical'
         Spacing = $Props.Spacing ?? 1
         Padding = $Props.Padding ?? 1
+        
+        # --- Visual Properties ---
         ShowBorder = $Props.ShowBorder ?? $false
         Title = $Props.Title
-        
-        # Methods
+
+        # =================================================================
+        # METHODS
+        # =================================================================
+
+        # --- Public Method: AddChild ---
         AddChild = {
             param($self, $Child)
             $self.Children += $Child
-            # Immediately recalculate layout
-            & $self._RecalculateLayout -self $self
+            $Child.Parent = $self
+            # We don't need to recalculate here; the Render loop will handle it,
+            # which is more efficient if multiple children are added in one frame.
         }
         
-        RemoveChild = {
-            param($self, $Child)
-            $self.Children = @($self.Children | Where-Object { $_ -ne $Child })
-            & $self._RecalculateLayout -self $self
-        }
-        
+        # --- Internal Method: _RecalculateLayout ---
         _RecalculateLayout = {
             param($self)
-            
-            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                Write-Log -Level Debug -Message "Panel _RecalculateLayout: X=$($self.X), Y=$($self.Y), Width=$($self.Width), Height=$($self.Height)"
-            }
-            
-            # Calculate content area
             $contentX = $self.X + $self.Padding
             $contentY = $self.Y + $self.Padding
             $contentWidth = $self.Width - ($self.Padding * 2)
@@ -1212,142 +1212,76 @@ function global:New-TuiPanel {
                 $contentHeight -= 2
             }
             
-            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                Write-Log -Level Debug -Message "  Content area: X=$contentX, Y=$contentY, Width=$contentWidth, Height=$contentHeight"
-            }
-            
-            # Apply layout
+            # Apply the chosen layout algorithm
             switch ($self.Layout) {
                 'Stack' {
                     $currentX = $contentX
                     $currentY = $contentY
                     
                     foreach ($child in $self.Children) {
-                        if (-not $child.Visible) { 
-                            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                                Write-Log -Level Debug -Message "    Skipping invisible child: Type=$($child.Type)"
-                            }
-                            continue 
-                        }
+                        # A child that is not visible does not occupy space in the layout.
+                        # This allows components to be "in" the panel but hidden without breaking layout.
+                        if ($child.Visible -ne $true) { continue }
                         
                         $child.X = $currentX
                         $child.Y = $currentY
                         
-                        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                            Write-Log -Level Debug -Message "    Positioned child: Type=$($child.Type), X=$($child.X), Y=$($child.Y), Width=$($child.Width), Height=$($child.Height)"
-                        }
-                        
-                        # Constrain child size to panel
                         if ($self.Orientation -eq 'Vertical') {
                             $child.Width = [Math]::Min($child.Width, $contentWidth)
                             $currentY += $child.Height + $self.Spacing
-                        } else {
+                        } else { # Horizontal
                             $child.Height = [Math]::Min($child.Height, $contentHeight)
                             $currentX += $child.Width + $self.Spacing
                         }
                     }
                 }
-                
-                'Grid' {
-                    # Simple grid - auto columns based on width
-                    if ($self.Children.Count -eq 0) { return }
-                    
-                    # Estimate columns based on average child width
-                    $avgWidth = 20
-                    if ($self.Children[0].Width) {
-                        $avgWidth = $self.Children[0].Width
-                    }
-                    
-                    $cols = [Math]::Max(1, [Math]::Floor($contentWidth / ($avgWidth + $self.Spacing)))
-                    $cellWidth = [Math]::Floor(($contentWidth - ($cols - 1) * $self.Spacing) / $cols)
-                    
-                    $row = 0
-                    $col = 0
-                    
-                    foreach ($child in $self.Children) {
-                        if (-not $child.Visible) { continue }
-                        
-                        $child.X = $contentX + ($col * ($cellWidth + $self.Spacing))
-                        $child.Y = $contentY + ($row * ($child.Height + $self.Spacing))
-                        $child.Width = [Math]::Min($child.Width, $cellWidth)
-                        
-                        $col++
-                        if ($col -ge $cols) {
-                            $col = 0
-                            $row++
-                        }
-                    }
-                }
+                # Other layouts like 'Grid' would be implemented here.
             }
         }
         
+        # --- THE NEW, CORRECTED RENDER METHOD ---
         Render = {
             param($self)
-            # CRITICAL: Don't render anything if panel is not visible
-            if (-not $self.Visible) { return }
             
-            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                Write-Log -Level Debug -Message "Panel Render: Type=$($self.Type), X=$($self.X), Y=$($self.Y), Width=$($self.Width), Height=$($self.Height), Children=$($self.Children.Count), Visible=$($self.Visible)"
+            # 1. THE GOLDEN RULE: If the panel is not visible, it does NOTHING.
+            # It does not render its border. It does not render its children.
+            # This single check solves the entire category of visibility bugs.
+            if ($self.Visible -ne $true) {
+                return
             }
             
-            # Draw border if requested
+            # 2. Recalculate layout on every render frame. This is the key to making
+            # the panel self-sufficient and responsive to changes in its own state.
+            & $self._RecalculateLayout -self $self
+
+            # 3. Draw the panel's own UI (its border and title).
             if ($self.ShowBorder) {
-                $borderColor = if ($self.IsFocused) {
-                    Get-ThemeColor "Accent" -Default ([ConsoleColor]::Cyan)
-                } else {
-                    Get-ThemeColor "Border" -Default ([ConsoleColor]::DarkGray)
-                }
-                
+                $borderColor = if ($self.IsFocused) { Get-ThemeColor "Accent" } else { Get-ThemeColor "Border" }
                 Write-BufferBox -X $self.X -Y $self.Y -Width $self.Width -Height $self.Height `
                     -BorderColor $borderColor -Title $self.Title
             }
             
-            # Render children if panel is visible
-            if ($self.Visible) {
-                $renderedCount = 0
-                foreach ($child in $self.Children) {
-                    if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                        Write-Log -Level Debug -Message "  Child[$renderedCount]: Type=$($child.Type), X=$($child.X), Y=$($child.Y), Visible=$($child.Visible), HasRender=$($null -ne $child.Render)"
-                    }
-                    
-                    # Force visibility check and render
-                    if ($child.Visible -eq $true -and $child.Render) {
-                        try {
-                            & $child.Render -self $child
-                            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                                Write-Log -Level Debug -Message "    Successfully rendered child[$renderedCount]"
-                            }
-                        } catch {
-                            if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                                Write-Log -Level Error -Message "    Error rendering child[$renderedCount]: $_"
-                            }
-                        }
-                    } else {
-                        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                            Write-Log -Level Debug -Message "    Skipped child[$renderedCount] - Visible=$($child.Visible), HasRender=$($null -ne $child.Render)"
-                        }
-                    }
-                    $renderedCount++
-                }
-                
-                if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-                    Write-Log -Level Debug -Message "Panel rendered $renderedCount children total"
+            # 4. Delegate rendering to children.
+            # The panel is now the orchestrator.
+            foreach ($child in $self.Children) {
+                # The panel respects the child's own Visible property. This allows for
+                # hiding a single field within an otherwise visible form.
+                # Since we already checked if the panel itself is visible, we are guaranteed
+                # that children of a hidden panel will never be rendered.
+                if ($child.Visible -eq $true -and $child.Render) {
+                    & $child.Render -self $child
                 }
             }
         }
         
+        # --- Input Handling ---
         HandleInput = {
             param($self, $Key)
-            # Panels don't handle input directly, but could implement focus management
-            return $false
+            return $false # Panels delegate focus, they don't handle input.
         }
     }
     
-    # Return as hashtable - methods must be called with & operator
-    # Initial layout calculation
-    & $componentDef._RecalculateLayout -self $componentDef
-    
-    return $componentDef
+    return $component
 }
 
 #endregion

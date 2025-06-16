@@ -90,3 +90,9 @@
 - Fix: Added exception to always render formPanel if visible, only skip other form components
 - Fix: Changed status bar bullet character (•) to pipe (|) to avoid encoding issues
 - Added debug logging to Panel render and layout methods for troubleshooting
+
+## June 15, 2025 - Root Cause Analysis
+- DataTable column width: Auto-calc divides space evenly, causes truncation on narrow columns
+- Panel visibility: Panel properly hides itself but task-screen renders children directly
+- Rendering hierarchy: Screens ignore parent-child relationships when rendering components
+- Fix needed: Check Parent property before rendering components in screen render loops

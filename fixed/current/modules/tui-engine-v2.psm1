@@ -297,6 +297,88 @@ function Process-TuiInput {
     return $processedAny
 }
 
+###```focus adddition 
+function global:Set-ComponentFocus {
+    param(
+        [hashtable]$Component
+    )
+    
+    $oldFocusedComponent = $script:TuiState.FocusedComponent
+    
+    if ($null -ne $oldFocusedComponent -and $oldFocusedComponent -ne $Component) {
+        $oldFocusedComponent.IsFocused = $false
+        if ($oldFocusedComponent.OnBlur) {
+            try { & $oldFocusedComponent.OnBlur -self $oldFocusedComponent }
+            catch { Write-Log -Level Warning -Message "OnBlur error: $_" }
+        }
+    }
+
+    if ($null -eq $Component) {
+        $script:TuiState.FocusedComponent = $null
+        Request-TuiRefresh
+        return
+    }
+
+    if ($Component.IsFocusable -ne $true -or $Component.Visible -ne $true) {
+        return
+    }
+
+    $script:TuiState.FocusedComponent = $Component
+    $Component.IsFocused = $true
+    
+    if ($Component.OnFocus) {
+        try { & $Component.OnFocus -self $Component }
+        catch { Write-Log -Level Warning -Message "OnFocus error: $_" }
+    }
+    
+    Request-TuiRefresh
+}
+
+function global:Handle-TabNavigation {
+    param(
+        [bool]$Reverse = $false
+    )
+    
+    $currentScreen = $script:TuiState.CurrentScreen
+    if (-not $currentScreen) { return }
+
+    $focusable = @()
+    $FindFocusableIn = {
+        param($component)
+        if ($component -and $component.IsFocusable -eq $true -and $component.Visible -eq $true) {
+            $script:focusable += $component
+        }
+        if ($component -and $component.Children) {
+            foreach ($child in $component.Children) {
+                & $script:FindFocusableIn -component $child
+            }
+        }
+    }
+    
+    foreach ($compName in $currentScreen.Components.Keys) {
+        & $FindFocusableIn -component $currentScreen.Components[$compName]
+    }
+
+    if ($focusable.Count -eq 0) { return }
+
+    $sortedFocusable = $focusable | Sort-Object { $_.Y }, { $_.X }
+
+    $currentIndex = [array]::IndexOf($sortedFocusable, $script:TuiState.FocusedComponent)
+    
+    $nextIndex = 0
+    if ($currentIndex -ne -1) {
+        $direction = if ($Reverse) { -1 } else { 1 }
+        $nextIndex = ($currentIndex + $direction + $sortedFocusable.Count) % $sortedFocusable.Count
+    }
+
+    Set-ComponentFocus -Component $sortedFocusable[$nextIndex]
+}
+
+function global:Clear-ComponentFocus {
+    Set-ComponentFocus -Component $null
+}
+###```
+
 function Process-SingleKeyInput {
     param($keyInfo)
     
