@@ -168,7 +168,15 @@ function global:Get-DashboardScreen {
                             switch ($SelectedIndex) {
                                 0 { if (Get-Command Get-TimeEntryFormScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimeEntryFormScreen) } }
                                 1 { if (Get-Command Get-TimerStartScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimerStartScreen) } }
-                                2 { if (Get-Command Get-TaskScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskScreen) } elseif (Get-Command Get-TaskManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskManagementScreen) } }
+                                2 {
+                                    if (Get-Command Get-TaskManagementScreenLayout -ErrorAction SilentlyContinue) {
+                                        Push-Screen -Screen (Get-TaskManagementScreenLayout)
+                                    } elseif (Get-Command Get-TaskManagementScreen -ErrorAction SilentlyContinue) {
+                                        Push-Screen -Screen (Get-TaskManagementScreen)
+                                    } elseif (Get-Command Get-TaskScreen -ErrorAction SilentlyContinue) {
+                                        Push-Screen -Screen (Get-TaskScreen)
+                                    }
+                                }
                                 3 { if (Get-Command Get-ProjectManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ProjectManagementScreen) } }
                                 4 { if (Get-Command Get-ReportsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ReportsScreen) } }
                                 5 { if (Get-Command Get-SettingsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-SettingsScreen) } }
@@ -461,7 +469,15 @@ function global:Get-DashboardScreen {
                     switch ($index) {
                         0 { if (Get-Command Get-TimeEntryFormScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimeEntryFormScreen) } }
                         1 { if (Get-Command Get-TimerStartScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TimerStartScreen) } }
-                        2 { if (Get-Command Get-TaskScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskScreen) } elseif (Get-Command Get-TaskManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-TaskManagementScreen) } }
+                        2 {
+                            if (Get-Command Get-TaskManagementScreenLayout -ErrorAction SilentlyContinue) {
+                                Push-Screen -Screen (Get-TaskManagementScreenLayout)
+                            } elseif (Get-Command Get-TaskManagementScreen -ErrorAction SilentlyContinue) {
+                                Push-Screen -Screen (Get-TaskManagementScreen)
+                            } elseif (Get-Command Get-TaskScreen -ErrorAction SilentlyContinue) {
+                                Push-Screen -Screen (Get-TaskScreen)
+                            }
+                        }
                         3 { if (Get-Command Get-ProjectManagementScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ProjectManagementScreen) } }
                         4 { if (Get-Command Get-ReportsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-ReportsScreen) } }
                         5 { if (Get-Command Get-SettingsScreen -ErrorAction SilentlyContinue) { Push-Screen -Screen (Get-SettingsScreen) } }

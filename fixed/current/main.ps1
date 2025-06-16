@@ -30,7 +30,7 @@ $script:ScreenModules = @(
     "dashboard-screen-grid",
     "time-entry-screen",
     "timer-start-screen",
-    "task-screen",
+    "task-screen-layout",  # <--- UPDATED
     "project-management-screen",
     "timer-management-screen",
     "reports-screen",
