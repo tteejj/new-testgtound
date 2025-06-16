@@ -19,6 +19,7 @@ function global:New-TuiLabel {
         Visible = $Props.Visible ?? $true
         Text = $Props.Text ?? ""
         ForegroundColor = $Props.ForegroundColor
+        Name = $Props.Name
         
         # Methods
         Render = {
@@ -54,6 +55,7 @@ function global:New-TuiButton {
         Height = $Props.Height ?? 3
         Visible = $Props.Visible ?? $true
         Text = $Props.Text ?? "Button"
+        Name = $Props.Name
         
         # Internal State
         IsPressed = $false
@@ -112,6 +114,7 @@ function global:New-TuiTextBox {
         Text = $Props.Text ?? ""
         Placeholder = $Props.Placeholder ?? ""
         MaxLength = $Props.MaxLength ?? 100
+        Name = $Props.Name
         
         # Internal State
         CursorPosition = $Props.CursorPosition ?? 0
@@ -256,6 +259,7 @@ function global:New-TuiCheckBox {
         Visible = $Props.Visible ?? $true
         Text = $Props.Text ?? "Checkbox"
         Checked = $Props.Checked ?? $false
+        Name = $Props.Name
         
         # Event Handlers (from Props)
         OnChange = $Props.OnChange
@@ -306,6 +310,7 @@ function global:New-TuiDropdown {
         Options = $Props.Options ?? @()
         Value = $Props.Value
         Placeholder = $Props.Placeholder ?? "Select..."
+        Name = $Props.Name
         
         # Internal State
         IsOpen = $false
@@ -421,6 +426,7 @@ function global:New-TuiProgressBar {
         Value = $Props.Value ?? 0
         Max = $Props.Max ?? 100
         ShowPercent = $Props.ShowPercent ?? $false
+        Name = $Props.Name
         
         # Methods
         Render = {
@@ -468,6 +474,7 @@ function global:New-TuiTextArea {
         Text = $Props.Text ?? ""
         Placeholder = $Props.Placeholder ?? "Enter text..."
         WrapText = $Props.WrapText ?? $true
+        Name = $Props.Name
         
         # Internal State
         Lines = @($Props.Text -split "`n")
@@ -736,6 +743,7 @@ function global:New-TuiDatePicker {
         Visible = $Props.Visible ?? $true
         Value = $Props.Value ?? (Get-Date)
         Format = $Props.Format ?? "yyyy-MM-dd"
+        Name = $Props.Name
         
         # Event Handlers (from Props)
         OnChange = $Props.OnChange
@@ -814,6 +822,7 @@ function global:New-TuiTimePicker {
         Hour = $Props.Hour ?? 0
         Minute = $Props.Minute ?? 0
         Format24H = $Props.Format24H ?? $true
+        Name = $Props.Name
         
         # Event Handlers (from Props)
         OnChange = $Props.OnChange
@@ -903,6 +912,7 @@ function global:New-TuiTable {
         Visible = $Props.Visible ?? $true
         Columns = $Props.Columns ?? @()
         Rows = $Props.Rows ?? @()
+        Name = $Props.Name
         
         # Internal State
         SelectedRow = 0
@@ -1080,6 +1090,7 @@ function global:New-TuiChart {
         ChartType = $Props.ChartType ?? "Bar"
         Data = $Props.Data ?? @()
         ShowValues = $Props.ShowValues ?? $true
+        Name = $Props.Name
         
         # Methods
         Render = {
@@ -1183,6 +1194,7 @@ function global:New-TuiPanel {
         # --- Visual Properties ---
         ShowBorder = $Props.ShowBorder ?? $false
         Title = $Props.Title
+        Name = $Props.Name
 
         # =================================================================
         # METHODS
@@ -1212,6 +1224,11 @@ function global:New-TuiPanel {
                 $contentHeight -= 2
             }
             
+            # Debug logging
+            if ((Get-Command Write-Log -ErrorAction SilentlyContinue) -and $self.Title) {
+                Write-Log -Level Debug -Message "Panel '$($self.Title)' layout: Panel at ($($self.X),$($self.Y)), Content area at ($contentX,$contentY) size ${contentWidth}x${contentHeight}"
+            }
+            
             # Apply the chosen layout algorithm
             switch ($self.Layout) {
                 'Stack' {
@@ -1225,6 +1242,11 @@ function global:New-TuiPanel {
                         
                         $child.X = $currentX
                         $child.Y = $currentY
+                        
+                        # Debug child positioning
+                        if ((Get-Command Write-Log -ErrorAction SilentlyContinue) -and $child.Name) {
+                            Write-Log -Level Debug -Message "  Positioned child '$($child.Name)' at ($($child.X),$($child.Y))"
+                        }
                         
                         if ($self.Orientation -eq 'Vertical') {
                             $child.Width = [Math]::Min($child.Width, $contentWidth)

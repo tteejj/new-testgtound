@@ -33,6 +33,8 @@ function global:New-TuiDataTable {
         MultiSelect = $Props.MultiSelect ?? $false
         SelectedRows = @()
         IsFocusable = $Props.IsFocusable ?? $true
+        Visible = $Props.Visible ?? $true
+        Name = $Props.Name
         FilteredData = @()
         ProcessedData = @()
         
@@ -113,6 +115,9 @@ function global:New-TuiDataTable {
         
         Render = {
             param($self)
+            
+            # CRITICAL: Check if component is visible
+            if ($self.Visible -eq $false) { return }
             
             # Debug: Check data state for Quick Actions
             if ($self.Title -eq "Quick Actions") {
@@ -680,6 +685,8 @@ function global:New-TuiTreeView {
         ScrollOffset = 0
         ShowRoot = $Props.ShowRoot ?? $true
         IsFocusable = $true
+        Visible = $Props.Visible ?? $true
+        Name = $Props.Name
         
         # Node structure:
         # @{
@@ -718,6 +725,9 @@ function global:New-TuiTreeView {
         
         Render = {
             param($self)
+            
+            # Check if component is visible
+            if ($self.Visible -eq $false) { return }
             
             # Flatten tree first
             & $self.FlattenTree -self $self

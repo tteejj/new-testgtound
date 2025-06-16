@@ -495,6 +495,12 @@ function global:Get-DashboardScreen {
         OnResume = {
             param($self)
             Write-Log -Level Debug -Message "Dashboard screen resuming"
+            
+            # Force complete buffer redraw to clear any artifacts from previous screen
+            if ($global:TuiState -and $global:TuiState.RenderStats) {
+                $global:TuiState.RenderStats.FrameCount = 0
+            }
+            
             # Refresh data when returning to dashboard
             & $self.RefreshData -screen $self
             

@@ -81,12 +81,24 @@ function global:Get-TaskManagementScreen {
             
             $isEditing = $null -ne $taskId
             
+            # Debug log
+            Write-Log -Level Debug -Message "ShowForm called, isEditing: $isEditing"
+            
             # Get form components through helper
             $titleField = & $screen.GetFormComponent -screen $screen -name "formTitle"
             $descField = & $screen.GetFormComponent -screen $screen -name "formDescription"
             $catField = & $screen.GetFormComponent -screen $screen -name "formCategory"
             $priField = & $screen.GetFormComponent -screen $screen -name "formPriority"
             $dueField = & $screen.GetFormComponent -screen $screen -name "formDueDate"
+            
+            # Debug: Check if components were found
+            Write-Log -Level Debug -Message "Form components found: Title=$($null -ne $titleField), Desc=$($null -ne $descField), Cat=$($null -ne $catField), Pri=$($null -ne $priField), Due=$($null -ne $dueField)"
+            
+            # Check if all components were found
+            if (-not $titleField -or -not $descField -or -not $catField -or -not $priField -or -not $dueField) {
+                Write-Log -Level Error -Message "Failed to find form components - aborting ShowForm"
+                return
+            }
             
             if ($isEditing) {
                 $task = $screen.State.tasks | Where-Object { $_.Id -eq $taskId }
@@ -119,8 +131,11 @@ function global:Get-TaskManagementScreen {
             & $screen.Components.formPanel.Show -self $screen.Components.formPanel
             $screen.Components.taskTable.Visible = $false
             
-            # Focus the title field
+            # Focus the title field - must happen AFTER showing the panel
+            Request-TuiRefresh
             Set-ComponentFocus -Component $titleField
+            
+            Write-Log -Level Debug -Message "Form shown, focus set to title field"
         }
 
         # In _task-screen.txt
@@ -260,7 +275,7 @@ HideForm = {
             # Create the form panel. It starts hidden and will contain all form elements.
             $self.Components.formPanel = New-TuiPanel -Props @{
                 X = 10; Y = 4; Width = 60; Height = 22
-                Layout = 'Stack'; Orientation = 'Vertical'; Spacing = 1; Padding = 2
+                Layout = 'Stack'; Orientation = 'Vertical'; Spacing = 0; Padding = 1
                 ShowBorder = $true
                 Visible = $false # The panel and all its children start hidden.
             }
@@ -268,14 +283,25 @@ HideForm = {
             # Add helper method to find form components
             $self.GetFormComponent = {
                 param($screen, $name)
+                Write-Log -Level Debug -Message "GetFormComponent looking for: $name"
+                Write-Log -Level Debug -Message "Panel has $($screen.Components.formPanel.Children.Count) children"
                 foreach ($child in $screen.Components.formPanel.Children) {
-                    if ($child.Name -eq $name) { return $child }
+                    Write-Log -Level Debug -Message "  Checking child: Name='$($child.Name)', Type='$($child.Type)'"
+                    if ($child.Name -eq $name) { 
+                        Write-Log -Level Debug -Message "  Found component: $name"
+                        return $child 
+                    }
                     if ($child.Children) {
                         foreach ($subchild in $child.Children) {
-                            if ($subchild.Name -eq $name) { return $subchild }
+                            Write-Log -Level Debug -Message "    Checking subchild: Name='$($subchild.Name)', Type='$($subchild.Type)'"
+                            if ($subchild.Name -eq $name) { 
+                                Write-Log -Level Debug -Message "    Found component in subchild: $name"
+                                return $subchild 
+                            }
                         }
                     }
                 }
+                Write-Log -Level Warning -Message "GetFormComponent failed to find: $name"
                 return $null
             }
             
@@ -293,7 +319,7 @@ HideForm = {
                 Text = "Description:"; Height = 1; Name = "descLabel"
             })
             & $self.Components.formPanel.AddChild -self $self.Components.formPanel -Child (New-TuiTextArea -Props @{
-                Width = 54; Height = 5; IsFocusable = $true; Name = "formDescription"
+                Width = 54; Height = 4; IsFocusable = $true; Name = "formDescription"
             })
             
             # Category dropdown
@@ -357,11 +383,32 @@ HideForm = {
                 Write-BufferString -X 2 -Y $toolbarY -Text "Filter: [1]All [2]Active [3]Completed | Sort: [P]riority [U]pcoming [C]reated"
             }
             
-            # Render all top-level components. The Panel will handle rendering its own children.
+            # CRITICAL Z-ORDER FIX: Render components in specific order
+            # 1. First render the task table (background layer)
+            if ($self.Components.taskTable -and $self.Components.taskTable.Render) {
+                & $self.Components.taskTable.Render -self $self.Components.taskTable
+            }
+            
+            # 2. If form is showing, clear the area where it will render
+            if ($self.State.showingForm -and $self.Components.formPanel) {
+                $panel = $self.Components.formPanel
+                # Clear the entire area where the form will render
+                for ($y = $panel.Y; $y -lt ($panel.Y + $panel.Height); $y++) {
+                    Write-BufferString -X $panel.X -Y $y -Text (" " * $panel.Width) `
+                        -BackgroundColor (Get-ThemeColor "Background")
+                }
+            }
+            
+            # 3. Then render the form panel (foreground layer) - it will render its children
+            if ($self.Components.formPanel -and $self.Components.formPanel.Render) {
+                & $self.Components.formPanel.Render -self $self.Components.formPanel
+            }
+            
+            # 4. Render any other components that don't have parents and aren't already rendered
             foreach ($kvp in $self.Components.GetEnumerator()) {
                 $component = $kvp.Value
-                # CRITICAL FIX: Only render components that don't have a parent
-                # This prevents child components from being rendered outside their parent's control
+                # Skip already rendered components and children with parents
+                if ($kvp.Key -eq "taskTable" -or $kvp.Key -eq "formPanel") { continue }
                 if ($component -and $component.Render -and -not $component.Parent) {
                     & $component.Render -self $component
                 }

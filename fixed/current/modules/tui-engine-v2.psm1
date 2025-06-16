@@ -999,10 +999,8 @@ function global:Get-NextFocusableComponent {
     function Find-FocusableComponents {
         param($Component)
         
-        if ($Component.CanFocus -ne $false -and 
-            $Component.IsEnabled -ne $false -and 
-            $Component.Disabled -ne $true -and
-            $Component.IsVisible -ne $false -and
+        # Check using the correct properties that our components actually have
+        if ($Component.IsFocusable -eq $true -and 
             $Component.Visible -ne $false) {
             $focusableComponents += $Component
         }
@@ -1060,12 +1058,19 @@ function global:Get-NextFocusableComponent {
 function global:Handle-TabNavigation {
     <#
     .SYNOPSIS
-    Handles Tab key navigation between components
+    Handles Tab key navigation between components  
     #>
     param([bool]$Reverse = $false)
     
+    if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+        Write-Log -Level Debug -Message "Handle-TabNavigation called, Reverse=$Reverse"
+    }
+    
     $next = Get-NextFocusableComponent -CurrentComponent $script:TuiState.FocusedComponent -Reverse $Reverse
     if ($next) {
+        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
+            Write-Log -Level Debug -Message "Setting focus to component: Type=$($next.Type), Name=$($next.Name)"
+        }
         Set-ComponentFocus -Component $next
     }
 }

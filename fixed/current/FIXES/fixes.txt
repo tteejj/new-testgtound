@@ -118,3 +118,29 @@ Changes Made:
 4. Updated ShowForm/HideForm to use Panel's Show/Hide methods
 5. Fixed DataTable column width for Quick Actions (single column gets full width)
 Result: Form components properly contained, no duplicate rendering, focus should work
+
+## June 16, 2025 - Task Screen "Text property not found" error
+- Issue: Pressing 'n' on task screen gives error about Text property
+- Root cause: Component factories don't copy Name property from Props
+- Fix: Add Name property to all component factories in tui-components.psm1
+
+## June 16, 2025 - Buffer not clearing when returning to dashboard
+- Issue: Screen artifacts remain when going back to dashboard from task screen
+- Fix: Add FrameCount reset to dashboard OnResume hook to force full redraw
+
+## June 16, 2025 - Task form components rendering behind table and outside panel
+- Issue: Form panel shows but components render at wrong positions and behind table
+- Root causes: DataTable doesn't check Visible property, no z-ordering, panel render order
+- Fix 1: Add Visible check to DataTable Render method
+- Fix 2: Render form panel AFTER table to ensure it appears on top
+- Fix 3: Clear buffer area where form will render to remove table remnants
+
+## June 16, 2025 - Form components overflowing panel bounds
+- Issue: Components positioned beyond panel height due to large default heights
+- Root cause: TextArea default height=6, plus other components with height=3 each
+- Fix: Reduce component heights in form creation to fit within panel
+
+## June 16, 2025 - Tab navigation not working in task form
+- Issue: Tab key does not move focus between form fields
+- Root cause: Get-NextFocusableComponent checking wrong properties (CanFocus, IsEnabled, IsVisible)
+- Fix: Update to check correct properties (IsFocusable, Visible) matching component definitions
